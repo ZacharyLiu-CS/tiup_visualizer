@@ -6,7 +6,7 @@ echo "======================================"
 echo "TiUP Visualizer - One-Click Start"
 echo "======================================"
 
-PROJECT_ROOT=$(cd "$(dirname "$0")/.." && pwd)
+PROJECT_ROOT=$(cd "$(dirname "$0")" && pwd)
 
 # Colors
 GREEN='\033[0;32m'
