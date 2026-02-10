@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  tiup-visualizer:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - /root/.tiup:/root/.tiup:ro
+    environment:
+      - APP_NAME=TiUP Visualizer
+      - DEBUG=False
+    restart: unless-stopped
