@@ -6,7 +6,15 @@ from app.core.config import settings
 from app.api.routes import router
 import os
 
-app = FastAPI(title=settings.app_name, debug=settings.debug)
+app = FastAPI(
+    title=settings.app_name,
+    debug=settings.debug,
+    root_path=settings.root_path,
+)
+
+# Trusted proxy support: correctly handle X-Forwarded-For, X-Forwarded-Proto
+# When behind Nginx, uvicorn should be started with --proxy-headers (default on)
+# and --forwarded-allow-ips to trust the proxy
 
 # Configure CORS
 app.add_middleware(

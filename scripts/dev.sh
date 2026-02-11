@@ -12,11 +12,12 @@ PROJECT_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 echo "Setting up backend..."
 cd "$PROJECT_ROOT/backend"
 
-if [ ! -d "venv" ]; then
-    python3 -m venv venv
+if ! conda env list | grep -q "^env_tiup_visualizer "; then
+    conda create --name env_tiup_visualizer python=3.8 -y
 fi
 
-source venv/bin/activate
+eval "$(conda shell.bash hook)"
+conda activate env_tiup_visualizer
 pip install --upgrade pip
 pip install -r requirements.txt
 
@@ -43,6 +44,6 @@ echo "Development environment ready!"
 echo "======================================"
 echo ""
 echo "To start development:"
-echo "  Backend:  cd backend && source venv/bin/activate && python -m uvicorn app.main:app --reload"
+echo '  Backend:  cd backend && eval "$(conda shell.bash hook)" && conda activate env_tiup_visualizer && python -m uvicorn app.main:app --reload'
 echo "  Frontend: cd frontend && npm run dev"
 echo ""

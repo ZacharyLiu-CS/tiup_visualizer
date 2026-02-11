@@ -28,11 +28,12 @@ echo -e "${GREEN}Frontend built successfully!${NC}"
 echo -e "${YELLOW}Setting up backend...${NC}"
 cd "$PROJECT_ROOT/backend"
 
-if [ ! -d "venv" ]; then
-    python3 -m venv venv
+if ! conda env list | grep -q "^env_tiup_visualizer "; then
+    conda create --name env_tiup_visualizer python=3.8 -y
 fi
 
-source venv/bin/activate
+eval "$(conda shell.bash hook)"
+conda activate env_tiup_visualizer
 pip install -q --upgrade pip
 pip install -q -r requirements.txt
 

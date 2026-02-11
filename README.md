@@ -128,6 +128,92 @@ cd build
 ./start.sh
 ```
 
+### Nginx 反向代理部署（推荐用于多站点）
+
+适用于在同一台服务器上部署多个站点的场景，通过 Nginx 反向代理将不同 URL 前缀路由到不同应用。
+
+#### 方式一：使用部署脚本
+
+1. 构建项目（可自定义路径前缀）：
+```bash
+# 默认前缀 /tiup-visualizer
+cd scripts && ./build.sh
+
+# 自定义前缀
+BASE_PATH=/my-app ./build.sh
+```
+
+2. 进入 build 目录，运行部署脚本：
+```bash
+cd build
+
+# 使用默认配置（前缀 /tiup-visualizer，端口 8000）
+./deploy-nginx.sh
+
+# 自定义路径前缀
+./deploy-nginx.sh --prefix /my-app
+
+# 自定义路径前缀和后端端口
+./deploy-nginx.sh --prefix /tools/tiup --port 8001
+```
+
+部署脚本会自动完成：
+- 创建 conda 环境并安装依赖
+- 将文件部署到 `/var/www/<prefix>/`
+- 从模板生成 Nginx 配置并加载
+- 创建并启动 systemd 服务
+
+部署完成后访问：
+- Web 界面：`http://your-server/tiup-visualizer/`
+- API 文档：`http://your-server/tiup-visualizer/docs`
+
+#### 方式二：使用 Docker Compose
+
+```bash
+# 使用默认路径前缀 /tiup-visualizer
+docker-compose -f docker-compose.nginx.yml up -d
+
+# 自定义路径前缀（修改 docker-compose.nginx.yml 中的 BASE_PATH）
+```
+
+`docker-compose.nginx.yml` 中可配置的参数：
+```yaml
+args:
+  BASE_PATH: /tiup-visualizer  # 修改为你需要的路径前缀
+```
+
+#### 管理服务
+
+```bash
+# 查看 Nginx 状态
+sudo systemctl status nginx
+
+# 查看后端服务状态（服务名基于路径前缀生成）
+sudo systemctl status tiup-visualizer-tiup-visualizer
+
+# 重启后端服务
+sudo systemctl restart tiup-visualizer-tiup-visualizer
+
+# 查看后端日志
+sudo journalctl -u tiup-visualizer-tiup-visualizer -f
+
+# 查看 Nginx 日志
+tail -f /var/log/nginx/tiup-visualizer-access.log
+tail -f /var/log/nginx/tiup-visualizer-error.log
+```
+
+#### 多站点部署示例
+
+在同一台机器上部署多个实例，使用不同前缀和端口：
+
+```bash
+# 实例 1
+./deploy-nginx.sh --prefix /cluster-a --port 8001
+
+# 实例 2
+./deploy-nginx.sh --prefix /cluster-b --port 8002
+```
+
 ### Docker Deployment
 
 ```bash

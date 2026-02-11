@@ -14,17 +14,28 @@ NC='\033[0m'
 PROJECT_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 BUILD_DIR="$PROJECT_ROOT/build"
 
+# Path prefix for sub-path deployment (default: /tiup-visualizer)
+# Override with: BASE_PATH=/my-app bash scripts/build.sh
+BASE_PATH="${BASE_PATH:-/tiup-visualizer}"
+# Normalize: ensure leading slash, no trailing slash
+BASE_PATH="/${BASE_PATH#/}"
+BASE_PATH="${BASE_PATH%/}"
+
+echo -e "Build path prefix: ${GREEN}${BASE_PATH}${NC}"
+echo ""
+
 echo -e "${YELLOW}Building backend...${NC}"
 cd "$PROJECT_ROOT/backend"
 
 # Create virtual environment if not exists
-if [ ! -d "venv" ]; then
-    echo "Creating Python virtual environment..."
-    python3 -m venv venv
+if ! conda env list | grep -q "^env_tiup_visualizer "; then
+    echo "Creating conda virtual environment..."
+    conda create --name env_tiup_visualizer python=3.8 -y
 fi
 
 # Activate virtual environment
-source venv/bin/activate
+eval "$(conda shell.bash hook)"
+conda activate env_tiup_visualizer
 
 # Install dependencies
 echo "Installing Python dependencies..."
@@ -42,9 +53,10 @@ if [ ! -d "node_modules" ]; then
     npm install
 fi
 
-# Build frontend
-echo "Building frontend for production..."
-npm run build
+# Build frontend with sub-path base
+# Vite uses BASE_PATH env to set the base URL for all assets
+echo "Building frontend for production (base: ${BASE_PATH}/)..."
+BASE_PATH="${BASE_PATH}/" npm run build
 
 echo -e "${GREEN}Frontend build complete!${NC}"
 
@@ -61,7 +73,12 @@ cp "$PROJECT_ROOT/backend/.env.example" "$BUILD_DIR/.env"
 # Copy frontend build
 cp -r "$PROJECT_ROOT/frontend/dist" "$BUILD_DIR/static"
 
-# Copy deployment script
+# Copy nginx template and deploy script
+cp "$PROJECT_ROOT/nginx.conf.template" "$BUILD_DIR/"
+cp "$PROJECT_ROOT/scripts/deploy-nginx.sh" "$BUILD_DIR/"
+chmod +x "$BUILD_DIR/deploy-nginx.sh"
+
+# Copy deployment script (direct run without nginx)
 cat > "$BUILD_DIR/start.sh" << 'EOF'
 #!/bin/bash
 
@@ -70,13 +87,14 @@ set -e
 echo "Starting TiUP Visualizer..."
 
 # Check if virtual environment exists
-if [ ! -d "venv" ]; then
-    echo "Creating virtual environment..."
-    python3 -m venv venv
+if ! conda env list | grep -q "^env_tiup_visualizer "; then
+    echo "Creating conda virtual environment..."
+    conda create --name env_tiup_visualizer python=3.8 -y
 fi
 
 # Activate virtual environment
-source venv/bin/activate
+eval "$(conda shell.bash hook)"
+conda activate env_tiup_visualizer
 
 # Install dependencies
 echo "Installing dependencies..."
@@ -100,7 +118,7 @@ After=network.target
 Type=simple
 User=$USER
 WorkingDirectory=$BUILD_DIR
-ExecStart=$BUILD_DIR/venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+ExecStart=/bin/bash -c 'eval "\$(conda shell.bash hook)" && conda activate env_tiup_visualizer && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000'
 Restart=on-failure
 RestartSec=10
 
@@ -108,57 +126,22 @@ RestartSec=10
 WantedBy=multi-user.target
 EOF
 
-# Create README
-cat > "$BUILD_DIR/README.md" << 'EOF'
-# TiUP Visualizer - Deployment
-
-## Quick Start
-
-### Method 1: Direct Run
-```bash
-./start.sh
-```
-
-### Method 2: Systemd Service (Production)
-```bash
-# Copy service file
-sudo cp tiup-visualizer.service /etc/systemd/system/
-
-# Edit the service file to update paths
-sudo nano /etc/systemd/system/tiup-visualizer.service
-
-# Reload systemd
-sudo systemctl daemon-reload
-
-# Start service
-sudo systemctl start tiup-visualizer
-
-# Enable on boot
-sudo systemctl enable tiup-visualizer
-
-# Check status
-sudo systemctl status tiup-visualizer
-```
-
-## Access
-- API: http://localhost:8000
-- Web Interface: http://localhost:8000 (served via static files)
-
-## Configuration
-Edit `.env` file to change settings.
-
-## Requirements
-- Python 3.8+
-- tiup command available in PATH
-- Proper permissions to execute tiup commands
-EOF
-
 echo -e "${GREEN}Build complete!${NC}"
 echo ""
 echo "Build directory: $BUILD_DIR"
+echo "Build path prefix: $BASE_PATH"
 echo ""
-echo "To deploy:"
-echo "  1. Copy $BUILD_DIR to your server"
-echo "  2. Run: ./start.sh"
+echo "Deployment options:"
 echo ""
-echo "Or use systemd service for production deployment."
+echo "  1. Nginx reverse proxy (recommended for multi-site):"
+echo "     cd $BUILD_DIR"
+echo "     ./deploy-nginx.sh --prefix $BASE_PATH"
+echo ""
+echo "  2. Direct run (standalone, no nginx):"
+echo "     cd $BUILD_DIR"
+echo "     ./start.sh"
+echo ""
+echo "  3. Systemd service (standalone, no nginx):"
+echo "     sudo cp $BUILD_DIR/tiup-visualizer.service /etc/systemd/system/"
+echo "     sudo systemctl daemon-reload && sudo systemctl start tiup-visualizer"
+echo ""

@@ -9,6 +9,8 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  // BASE_PATH env is set during build for sub-path deployment (e.g. "/tiup-visualizer/")
+  base: process.env.BASE_PATH || '/',
   server: {
     port: 5173,
     proxy: {

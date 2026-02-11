@@ -14,9 +14,9 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-# Check Python
-if ! command -v python3 &> /dev/null; then
-    echo -e "${RED}Error: Python 3 is not installed${NC}"
+# Check conda
+if ! command -v conda &> /dev/null; then
+    echo -e "${RED}Error: conda is not installed${NC}"
     exit 1
 fi
 
@@ -35,20 +35,21 @@ fi
 echo -e "${YELLOW}Setting up backend...${NC}"
 cd "$PROJECT_ROOT/backend"
 
-# Setup Python virtual environment
-if [ ! -d "venv" ]; then
-    echo "Creating Python virtual environment..."
-    python3 -m venv venv
+# Setup Python virtual environment with conda
+if ! conda env list | grep -q "^env_tiup_visualizer "; then
+    echo "Creating conda virtual environment..."
+    conda create --name env_tiup_visualizer python=3.8 -y
 fi
 
-source venv/bin/activate
+eval "$(conda shell.bash hook)"
+conda activate env_tiup_visualizer
 
 # Install Python dependencies
-if [ ! -f "venv/.installed" ]; then
+if [ ! -f "$CONDA_PREFIX/.installed" ]; then
     echo "Installing Python dependencies..."
     pip install -q --upgrade pip
     pip install -q -r requirements.txt
-    touch venv/.installed
+    touch "$CONDA_PREFIX/.installed"
 else
     echo "Python dependencies already installed"
 fi
@@ -95,7 +96,8 @@ echo "======================================"
 # Start backend
 echo -e "${YELLOW}Starting backend on http://localhost:8000${NC}"
 cd "$PROJECT_ROOT/backend"
-source venv/bin/activate
+eval "$(conda shell.bash hook)"
+conda activate env_tiup_visualizer
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > /tmp/tiup-visualizer-backend.log 2>&1 &
 BACKEND_PID=$!
 

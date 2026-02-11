@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  tiup-visualizer:
+    build:
+      context: .
+      dockerfile: Dockerfile.nginx
+      args:
+        # Change this to deploy at a different sub-path
+        BASE_PATH: /tiup-visualizer
+    ports:
+      - "80:80"
+    volumes:
+      - /root/.tiup:/root/.tiup:ro
+    environment:
+      - APP_NAME=TiUP Visualizer
+      - DEBUG=False
+    restart: unless-stopped

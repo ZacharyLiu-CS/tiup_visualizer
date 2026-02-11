@@ -2,7 +2,8 @@
 
 # Start backend in background
 cd backend
-source venv/bin/activate
+eval "$(conda shell.bash hook)"
+conda activate env_tiup_visualizer
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 &
 BACKEND_PID=$!
 
