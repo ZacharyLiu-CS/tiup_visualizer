@@ -80,7 +80,8 @@ NGINX_SITE_NAME="$SERVICE_NAME"
 # ---- Preflight checks ----
 if ! command -v nginx &> /dev/null; then
     echo -e "${RED}Error: Nginx is not installed${NC}"
-    echo "Install with: sudo apt install nginx"
+    echo "Install with: sudo apt install nginx  (Debian/Ubuntu)"
+    echo "          or: sudo yum install nginx   (CentOS/RHEL)"
     exit 1
 fi
 
@@ -139,8 +140,23 @@ if [ -f "$BUILD_DIR/nginx.conf.template" ]; then
         -e "s|__STATIC_DIR__|${DEPLOY_DIR}/static|g" \
         "$BUILD_DIR/nginx.conf.template" > /tmp/"$NGINX_SITE_NAME".conf
 
-    sudo cp /tmp/"$NGINX_SITE_NAME".conf /etc/nginx/sites-available/"$NGINX_SITE_NAME"
-    sudo ln -sf /etc/nginx/sites-available/"$NGINX_SITE_NAME" /etc/nginx/sites-enabled/
+    # Detect nginx config layout: sites-available (Debian/Ubuntu) vs conf.d (CentOS/RHEL)
+    if [ -d /etc/nginx/sites-available ]; then
+        sudo cp /tmp/"$NGINX_SITE_NAME".conf /etc/nginx/sites-available/"$NGINX_SITE_NAME"
+        sudo ln -sf /etc/nginx/sites-available/"$NGINX_SITE_NAME" /etc/nginx/sites-enabled/
+        echo -e "${GREEN}Nginx config installed to sites-available/${NGINX_SITE_NAME}${NC}"
+    elif [ -d /etc/nginx/conf.d ]; then
+        sudo cp /tmp/"$NGINX_SITE_NAME".conf /etc/nginx/conf.d/"$NGINX_SITE_NAME".conf
+        echo -e "${GREEN}Nginx config installed to conf.d/${NGINX_SITE_NAME}.conf${NC}"
+        # Warn about potential conflict with default server block in nginx.conf
+        if grep -q "listen.*80" /etc/nginx/nginx.conf 2>/dev/null; then
+            echo -e "${YELLOW}Note: Your /etc/nginx/nginx.conf may contain a default server block on port 80.${NC}"
+            echo -e "${YELLOW}If nginx -t fails, comment out or remove the default server block in /etc/nginx/nginx.conf${NC}"
+        fi
+    else
+        echo -e "${RED}Error: Cannot find /etc/nginx/sites-available or /etc/nginx/conf.d${NC}"
+        exit 1
+    fi
 else
     echo -e "${RED}Error: nginx.conf.template not found in build directory${NC}"
     exit 1

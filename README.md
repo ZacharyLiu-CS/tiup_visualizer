@@ -225,6 +225,98 @@ docker build -t tiup-visualizer .
 docker run -p 8000:8000 -v /root/.tiup:/root/.tiup:ro tiup-visualizer
 ```
 
+## Scripts
+
+`scripts/` 目录下提供了开发、构建和部署相关的脚本工具。
+
+### `scripts/dev.sh` — 开发环境初始化
+
+一键配置开发环境，创建 conda 虚拟环境、安装后端和前端依赖、复制 `.env` 配置文件。
+
+```bash
+# 初始化开发环境
+cd scripts && ./dev.sh
+
+# 初始化完成后，按提示分别启动前后端：
+# Terminal 1 - Backend:
+cd backend && eval "$(conda shell.bash hook)" && conda activate env_tiup_visualizer && python -m uvicorn app.main:app --reload
+
+# Terminal 2 - Frontend:
+cd frontend && npm run dev
+```
+
+### `scripts/start-dev.sh` — 同时启动前后端
+
+在同一个终端中同时启动后端（uvicorn）和前端（vite dev server），适合快速开发调试。需要先运行 `dev.sh` 完成环境初始化。
+
+```bash
+# 从项目根目录运行
+cd scripts && ./start-dev.sh
+
+# Ctrl+C 停止所有服务
+```
+
+### `scripts/build.sh` — 生产构建打包
+
+构建前后端并生成部署包到 `build/` 目录。支持通过 `BASE_PATH` 环境变量自定义 URL 路径前缀。
+
+```bash
+# 使用默认路径前缀 /tiup-visualizer
+cd scripts && ./build.sh
+
+# 自定义路径前缀
+BASE_PATH=/my-app ./build.sh
+
+# 构建完成后，build/ 目录包含：
+#   app/                  - 后端代码
+#   static/               - 前端静态文件
+#   start.sh              - 独立启动脚本
+#   deploy-nginx.sh       - Nginx 部署脚本
+#   nginx.conf.template   - Nginx 配置模板
+#   tiup-visualizer.service - systemd 服务文件
+```
+
+### `scripts/deploy-nginx.sh` — Nginx 反向代理部署
+
+在服务器上配置 Nginx 反向代理 + systemd 服务，支持自定义路径前缀和端口，适合多站点共存部署。需要先运行 `build.sh` 生成部署包。
+
+```bash
+cd build
+
+# 默认部署（前缀 /tiup-visualizer，端口 8000）
+./deploy-nginx.sh
+
+# 自定义路径前缀和端口
+./deploy-nginx.sh --prefix /tools/tiup --port 8001
+
+# 查看帮助
+./deploy-nginx.sh --help
+```
+
+### `scripts/mock-tiup.sh` — TiUP 模拟数据
+
+在没有真实 TiUP 环境时提供模拟数据，用于开发和测试。支持 `cluster list` 和 `cluster display` 两个子命令。
+
+```bash
+# 模拟 tiup cluster list
+./scripts/mock-tiup.sh cluster list
+
+# 模拟 tiup cluster display <cluster-name>
+./scripts/mock-tiup.sh cluster display eg3-cicd-proxy
+```
+
+### `scripts/upload.sh` — 构建包上传
+
+将 `build/` 目录打包为 `.tar.gz` 并上传到制品仓库。需要先运行 `build.sh` 完成构建。
+
+```bash
+# 先构建，再上传
+cd scripts && ./build.sh
+./upload.sh
+
+# 上传完成后会提示是否删除本地压缩包
+```
+
 ## API Endpoints
 
 - `GET /api/v1/clusters` - Get all clusters
