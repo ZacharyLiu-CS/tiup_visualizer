@@ -73,8 +73,9 @@ cp "$PROJECT_ROOT/backend/.env.example" "$BUILD_DIR/.env"
 # Copy frontend build
 cp -r "$PROJECT_ROOT/frontend/dist" "$BUILD_DIR/static"
 
-# Copy nginx template and deploy script
+# Copy nginx templates and deploy script
 cp "$PROJECT_ROOT/nginx.conf.template" "$BUILD_DIR/"
+cp "$PROJECT_ROOT/nginx.upstream.template" "$BUILD_DIR/"
 cp "$PROJECT_ROOT/scripts/deploy-nginx.sh" "$BUILD_DIR/"
 chmod +x "$BUILD_DIR/deploy-nginx.sh"
 

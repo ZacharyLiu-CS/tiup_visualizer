@@ -144,36 +144,94 @@ sudo cp -r "$BUILD_DIR/static" "$DEPLOY_DIR/static"
 echo -e "${GREEN}Files deployed!${NC}"
 
 # ---- Generate Nginx config from template ----
+# Strategy: inject location blocks into the existing server{} block instead of
+# creating a separate server{} block that would conflict with /etc/nginx/nginx.conf.
+#
+# - upstream config  → /etc/nginx/conf.d/  (http-level, always loaded)
+# - location blocks  → /etc/nginx/default.d/ (inside existing server{} via include)
+#                    OR injected into the main server block for Debian/Ubuntu layouts
 echo -e "${YELLOW}Configuring Nginx...${NC}"
 
-if [ -f "$BUILD_DIR/nginx.conf.template" ]; then
-    sed \
-        -e "s|__PATH_PREFIX__|${PATH_PREFIX}|g" \
-        -e "s|__BACKEND_PORT__|${BACKEND_PORT}|g" \
-        -e "s|__STATIC_DIR__|${DEPLOY_DIR}/static|g" \
-        "$BUILD_DIR/nginx.conf.template" > /tmp/"$NGINX_SITE_NAME".conf
-
-    # Detect nginx config layout: sites-available (Debian/Ubuntu) vs conf.d (CentOS/RHEL)
-    if [ -d /etc/nginx/sites-available ]; then
-        sudo cp /tmp/"$NGINX_SITE_NAME".conf /etc/nginx/sites-available/"$NGINX_SITE_NAME"
-        sudo ln -sf /etc/nginx/sites-available/"$NGINX_SITE_NAME" /etc/nginx/sites-enabled/
-        echo -e "${GREEN}Nginx config installed to sites-available/${NGINX_SITE_NAME}${NC}"
-    elif [ -d /etc/nginx/conf.d ]; then
-        sudo cp /tmp/"$NGINX_SITE_NAME".conf /etc/nginx/conf.d/"$NGINX_SITE_NAME".conf
-        echo -e "${GREEN}Nginx config installed to conf.d/${NGINX_SITE_NAME}.conf${NC}"
-        # Warn about potential conflict with default server block in nginx.conf
-        if grep -q "listen.*80" /etc/nginx/nginx.conf 2>/dev/null; then
-            echo -e "${YELLOW}Note: Your /etc/nginx/nginx.conf may contain a default server block on port 80.${NC}"
-            echo -e "${YELLOW}If nginx -t fails, comment out or remove the default server block in /etc/nginx/nginx.conf${NC}"
-        fi
-    else
-        echo -e "${RED}Error: Cannot find /etc/nginx/sites-available or /etc/nginx/conf.d${NC}"
-        exit 1
-    fi
-else
+if [ ! -f "$BUILD_DIR/nginx.conf.template" ]; then
     echo -e "${RED}Error: nginx.conf.template not found in build directory${NC}"
     exit 1
 fi
+
+if [ ! -f "$BUILD_DIR/nginx.upstream.template" ]; then
+    echo -e "${RED}Error: nginx.upstream.template not found in build directory${NC}"
+    exit 1
+fi
+
+# Generate upstream config (goes into http{} level via conf.d)
+sed \
+    -e "s|__BACKEND_PORT__|${BACKEND_PORT}|g" \
+    "$BUILD_DIR/nginx.upstream.template" > /tmp/"$NGINX_SITE_NAME"-upstream.conf
+
+# Generate location-only config (goes inside an existing server{} block)
+sed \
+    -e "s|__PATH_PREFIX__|${PATH_PREFIX}|g" \
+    -e "s|__BACKEND_PORT__|${BACKEND_PORT}|g" \
+    -e "s|__STATIC_DIR__|${DEPLOY_DIR}/static|g" \
+    "$BUILD_DIR/nginx.conf.template" > /tmp/"$NGINX_SITE_NAME"-locations.conf
+
+# Install upstream to conf.d (works on both Debian and RHEL)
+if [ -d /etc/nginx/conf.d ]; then
+    # Clean up old server-block style config if it exists (from previous deployment)
+    if [ -f /etc/nginx/conf.d/"$NGINX_SITE_NAME".conf ]; then
+        echo -e "${YELLOW}Removing old conf.d/${NGINX_SITE_NAME}.conf (contained server block)...${NC}"
+        sudo rm -f /etc/nginx/conf.d/"$NGINX_SITE_NAME".conf
+    fi
+    sudo cp /tmp/"$NGINX_SITE_NAME"-upstream.conf /etc/nginx/conf.d/"$NGINX_SITE_NAME"-upstream.conf
+    echo -e "${GREEN}Upstream config installed to conf.d/${NGINX_SITE_NAME}-upstream.conf${NC}"
+else
+    sudo mkdir -p /etc/nginx/conf.d
+    sudo cp /tmp/"$NGINX_SITE_NAME"-upstream.conf /etc/nginx/conf.d/"$NGINX_SITE_NAME"-upstream.conf
+fi
+
+# Install location blocks into the default server{} block
+if [ -d /etc/nginx/default.d ]; then
+    # RHEL/CentOS: /etc/nginx/nginx.conf has `include /etc/nginx/default.d/*.conf;` inside server{}
+    sudo cp /tmp/"$NGINX_SITE_NAME"-locations.conf /etc/nginx/default.d/"$NGINX_SITE_NAME".conf
+    echo -e "${GREEN}Location config installed to default.d/${NGINX_SITE_NAME}.conf${NC}"
+
+    # Also clean up old sites-available style config if it exists
+    if [ -f /etc/nginx/sites-enabled/"$NGINX_SITE_NAME" ]; then
+        sudo rm -f /etc/nginx/sites-enabled/"$NGINX_SITE_NAME"
+        sudo rm -f /etc/nginx/sites-available/"$NGINX_SITE_NAME"
+    fi
+elif [ -d /etc/nginx/sites-available ]; then
+    # Debian/Ubuntu: no default.d, so we create a snippet and include it
+    # We put it in /etc/nginx/snippets/ and add an include to the main site config
+    sudo mkdir -p /etc/nginx/snippets
+    sudo cp /tmp/"$NGINX_SITE_NAME"-locations.conf /etc/nginx/snippets/"$NGINX_SITE_NAME".conf
+    echo -e "${GREEN}Location config installed to snippets/${NGINX_SITE_NAME}.conf${NC}"
+
+    # Check if default site already includes our snippet
+    DEFAULT_SITE="/etc/nginx/sites-available/default"
+    INCLUDE_LINE="include /etc/nginx/snippets/${NGINX_SITE_NAME}.conf;"
+    if [ -f "$DEFAULT_SITE" ] && ! grep -qF "$INCLUDE_LINE" "$DEFAULT_SITE"; then
+        echo -e "${YELLOW}Adding include directive to ${DEFAULT_SITE}...${NC}"
+        # Insert include before the last closing brace of the first server block
+        sudo sed -i "/^[[:space:]]*server[[:space:]]*{/,/^[[:space:]]*}/ {
+            /^[[:space:]]*}/ i\\    ${INCLUDE_LINE}
+        }" "$DEFAULT_SITE"
+        echo -e "${GREEN}Include directive added to default site config${NC}"
+    fi
+
+    # Clean up old server-block style config
+    if [ -f /etc/nginx/sites-enabled/"$NGINX_SITE_NAME" ]; then
+        sudo rm -f /etc/nginx/sites-enabled/"$NGINX_SITE_NAME"
+        sudo rm -f /etc/nginx/sites-available/"$NGINX_SITE_NAME"
+        echo -e "${YELLOW}Removed old sites-available/${NGINX_SITE_NAME} (contained server block)${NC}"
+    fi
+else
+    echo -e "${RED}Error: Cannot find /etc/nginx/default.d or /etc/nginx/sites-available${NC}"
+    echo -e "${RED}Unable to inject location blocks into existing server configuration${NC}"
+    exit 1
+fi
+
+# Clean up temp files
+rm -f /tmp/"$NGINX_SITE_NAME"-upstream.conf /tmp/"$NGINX_SITE_NAME"-locations.conf
 
 # Test nginx config
 if sudo nginx -t; then
