@@ -12,6 +12,7 @@ set -e
 # Options:
 #   --prefix PATH    URL path prefix (default: /tiup-visualizer)
 #   --port PORT      Backend uvicorn port (default: 8000)
+#   --user USER      System user to run the service (default: current user)
 #   --help           Show this help
 #
 # Examples:
@@ -19,6 +20,7 @@ set -e
 #   ./deploy-nginx.sh --prefix /my-app           # Deploy at /my-app
 #   ./deploy-nginx.sh --prefix /tools/tiup       # Deploy at /tools/tiup
 #   ./deploy-nginx.sh --prefix /tiup --port 8001 # Custom port
+#   ./deploy-nginx.sh --user www-data            # Run as www-data user
 # ======================================================
 
 # Colors
@@ -30,6 +32,7 @@ NC='\033[0m'
 # Defaults
 PATH_PREFIX="/tiup-visualizer"
 BACKEND_PORT="8000"
+RUN_USER="$USER"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -42,8 +45,12 @@ while [[ $# -gt 0 ]]; do
             BACKEND_PORT="$2"
             shift 2
             ;;
+        --user)
+            RUN_USER="$2"
+            shift 2
+            ;;
         --help)
-            head -22 "$0" | tail -17
+            head -23 "$0" | tail -18
             exit 0
             ;;
         *)
@@ -69,12 +76,13 @@ echo "======================================"
 echo ""
 echo -e "Path prefix:  ${GREEN}${PATH_PREFIX}${NC}"
 echo -e "Backend port: ${GREEN}${BACKEND_PORT}${NC}"
+echo -e "Run as user:  ${GREEN}${RUN_USER}${NC}"
 echo ""
 
 BUILD_DIR=$(cd "$(dirname "$0")" && pwd)
 APP_NAME="tiup-visualizer"
 DEPLOY_DIR="/var/www${PATH_PREFIX}"
-SERVICE_NAME="tiup-visualizer-$(echo "$PATH_PREFIX" | tr '/' '-' | sed 's/^-//')"
+SERVICE_NAME="tiup-visualizer"
 NGINX_SITE_NAME="$SERVICE_NAME"
 
 # ---- Preflight checks ----
@@ -92,6 +100,11 @@ fi
 
 if [ ! -f "$BUILD_DIR/requirements.txt" ]; then
     echo -e "${RED}Error: requirements.txt not found. Run this script from the build directory.${NC}"
+    exit 1
+fi
+
+if ! id "$RUN_USER" &>/dev/null; then
+    echo -e "${RED}Error: User '${RUN_USER}' does not exist${NC}"
     exit 1
 fi
 
@@ -176,6 +189,15 @@ sudo systemctl reload nginx
 echo -e "${YELLOW}Creating systemd service: ${SERVICE_NAME}...${NC}"
 
 CONDA_PREFIX_PATH=$(conda info --base)
+RUN_USER_HOME=$(eval echo "~$RUN_USER")
+TIUP_BIN_DIR="$RUN_USER_HOME/.tiup/bin"
+
+if [ ! -f "$TIUP_BIN_DIR/tiup" ]; then
+    echo -e "${YELLOW}Warning: tiup not found at ${TIUP_BIN_DIR}/tiup${NC}"
+    echo -e "${YELLOW}The service user '${RUN_USER}' may not have tiup installed.${NC}"
+    echo -e "${YELLOW}Install tiup for this user: sudo -u ${RUN_USER} bash -c 'curl --proto =https --tlsv1.2 -sSf https://tiup-mirrors.pingcap.com/install.sh | sh'${NC}"
+fi
+
 cat > /tmp/"$SERVICE_NAME".service << EOF
 [Unit]
 Description=TiUP Visualizer Backend (${PATH_PREFIX})
@@ -183,12 +205,13 @@ After=network.target
 
 [Service]
 Type=simple
-User=$USER
+User=$RUN_USER
 WorkingDirectory=$DEPLOY_DIR
 ExecStart=/bin/bash -c 'eval "\$(${CONDA_PREFIX_PATH}/bin/conda shell.bash hook)" && conda activate env_tiup_visualizer && python -m uvicorn app.main:app --host 127.0.0.1 --port ${BACKEND_PORT} --workers 2'
 Restart=on-failure
 RestartSec=10
-Environment="PATH=${CONDA_PREFIX_PATH}/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PATH=${TIUP_BIN_DIR}:${CONDA_PREFIX_PATH}/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="HOME=${RUN_USER_HOME}"
 
 [Install]
 WantedBy=multi-user.target
