@@ -28,19 +28,10 @@ See [QUICKSTART.md](QUICKSTART.md) for detailed instructions.
 
 ```bash
 cd tiup-visualizer
-./start.sh
+./scripts/start-dev.sh
 ```
 
 Access at: **http://localhost:5173**
-
-### Production Deployment
-
-```bash
-cd tiup-visualizer
-./start-prod.sh
-```
-
-Access at: **http://localhost:8000**
 
 ## Project Structure
 
@@ -75,7 +66,7 @@ tiup-visualizer/
 
 ```bash
 cd tiup-visualizer
-./start.sh
+./scripts/start-dev.sh
 ```
 
 That's it! The script will:

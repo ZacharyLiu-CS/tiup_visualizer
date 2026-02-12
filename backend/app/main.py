@@ -2,10 +2,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from app.core.config import settings
+from app.core.config import settings, setup_logging
 from app.api.routes import router
+from app.api.auth_routes import router as auth_router
 from app.api.terminal import router as terminal_router
 import os
+
+# Setup logging from config.yaml
+logger = setup_logging()
 
 app = FastAPI(
     title=settings.app_name,
@@ -26,11 +30,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include API routes
+# Include auth routes (no authentication required)
+app.include_router(auth_router, prefix=settings.api_prefix)
+
+# Include API routes (authentication required via dependency)
 app.include_router(router, prefix=settings.api_prefix)
 
 # Include WebSocket terminal route
 app.include_router(terminal_router)
+
+logger.info("TiUP Visualizer started")
 
 
 @app.get("/health")

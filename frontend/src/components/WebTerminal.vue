@@ -138,7 +138,8 @@ export default {
 
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
       const basePath = import.meta.env.BASE_URL.replace(/\/+$/, '')
-      const wsUrl = `${protocol}//${window.location.host}${basePath}/ws/terminal`
+      const token = localStorage.getItem('auth_token') || ''
+      const wsUrl = `${protocol}//${window.location.host}${basePath}/ws/terminal?token=${encodeURIComponent(token)}`
 
       this.ws = new WebSocket(wsUrl)
       this.ws.binaryType = 'arraybuffer'

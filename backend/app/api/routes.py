@@ -1,17 +1,18 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends, Query
 from fastapi.responses import StreamingResponse, PlainTextResponse
-from typing import List, Dict
+from typing import List, Dict, Optional
 import subprocess
 import os
 from app.services.tiup_service import TiUPService
 from app.models.cluster import ClusterInfo, ClusterDetail, HostInfo
+from app.core.auth import get_current_user
 
 router = APIRouter()
 tiup_service = TiUPService()
 
 
 @router.get("/clusters", response_model=List[ClusterInfo])
-async def get_clusters():
+async def get_clusters(current_user: str = Depends(get_current_user)):
     """Get all TiUP clusters"""
     try:
         return tiup_service.get_all_clusters()
@@ -20,7 +21,7 @@ async def get_clusters():
 
 
 @router.get("/clusters/{cluster_name}", response_model=ClusterDetail)
-async def get_cluster_detail(cluster_name: str):
+async def get_cluster_detail(cluster_name: str, current_user: str = Depends(get_current_user)):
     """Get detailed information of a specific cluster"""
     try:
         return tiup_service.get_cluster_detail(cluster_name)
@@ -29,7 +30,7 @@ async def get_cluster_detail(cluster_name: str):
 
 
 @router.get("/hosts", response_model=Dict[str, HostInfo])
-async def get_hosts():
+async def get_hosts(current_user: str = Depends(get_current_user)):
     """Get all physical hosts"""
     try:
         return tiup_service.get_all_hosts()
@@ -38,7 +39,7 @@ async def get_hosts():
 
 
 @router.get("/hosts/{host_ip}/clusters", response_model=List[str])
-async def get_host_clusters(host_ip: str):
+async def get_host_clusters(host_ip: str, current_user: str = Depends(get_current_user)):
     """Get all clusters deployed on a specific host"""
     try:
         hosts = tiup_service.get_all_hosts()
@@ -50,8 +51,9 @@ async def get_host_clusters(host_ip: str):
 
 
 @router.get("/logs/{cluster_name}/{component_id}/{filename}")
-async def get_log_file(cluster_name: str, component_id: str, filename: str, action: str = "view"):
-    """Get a log file for a component. action=view returns text, action=download returns file download."""
+async def get_log_file(cluster_name: str, component_id: str, filename: str, action: str = "view", token: Optional[str] = Query(default=None), current_user: str = Depends(get_current_user)):
+    """Get a log file for a component. action=view returns text, action=download returns file download.
+    Supports both Bearer token in header and token as query parameter (for direct browser access)."""
     try:
         log_path, component = tiup_service.get_log_file_path(cluster_name, component_id, filename)
         host = component.host

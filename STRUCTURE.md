@@ -3,8 +3,7 @@
 ```
 tiup-visualizer/
 │
-├── 📄 start.sh                    # 一键启动脚本 (开发模式)
-├── 📄 start-prod.sh               # 一键启动脚本 (生产模式)
+
 ├── 📄 README.md                   # 项目文档
 ├── 📄 QUICKSTART.md               # 快速开始指南
 ├── 📄 .gitignore                  # Git 忽略文件
@@ -71,8 +70,7 @@ tiup-visualizer/
 ## 核心文件说明
 
 ### 启动脚本
-- **start.sh** - 开发模式一键启动,前后端分离
-- **start-prod.sh** - 生产模式一键启动,前后端合并
+- **scripts/start-dev.sh** - 开发模式一键启动,前后端分离
 
 ### 后端核心
 - **app/main.py** - FastAPI 应用,路由配置,静态文件服务

@@ -32,6 +32,9 @@ COPY --from=frontend-builder /app/dist ./static
 # Copy env file
 COPY backend/.env.example ./.env
 
+# Copy config file
+COPY backend/config.yaml.example ./config.yaml
+
 EXPOSE 8000
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

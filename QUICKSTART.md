@@ -6,7 +6,7 @@
 
 ```bash
 cd tiup-visualizer
-./start.sh
+./scripts/start-dev.sh
 ```
 
 **这个脚本会自动完成:**
@@ -22,24 +22,6 @@ cd tiup-visualizer
 - 📚 API 文档: http://localhost:8000/docs
 
 **停止服务:** 按 `Ctrl+C`
-
----
-
-## 生产部署 (单端口)
-
-如果需要生产环境部署,前后端合并到一个端口:
-
-```bash
-cd tiup-visualizer
-./start-prod.sh
-```
-
-**访问地址:** http://localhost:8000
-
-这个模式会:
-- 构建前端静态文件
-- 将前端集成到后端
-- 只使用一个端口 (8000)
 
 ---
 

@@ -12,7 +12,7 @@ export PATH="$(pwd)/scripts:$PATH"
 ln -sf mock-tiup.sh scripts/tiup
 
 # 启动应用
-./start.sh
+./scripts/start-dev.sh
 ```
 
 ### 方法 2: 修改后端代码使用 mock

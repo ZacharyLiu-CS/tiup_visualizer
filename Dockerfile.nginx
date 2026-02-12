@@ -51,6 +51,9 @@ COPY --from=frontend-builder /app/dist /var/www/tiup-visualizer/static
 COPY backend/.env.example ./.env
 RUN sed -i "s|^ROOT_PATH=.*|ROOT_PATH=\"${BASE_PATH}\"|" ./.env
 
+# Copy config file
+COPY backend/config.yaml.example ./config.yaml
+
 # Generate nginx config from template
 COPY nginx.conf.template /tmp/nginx.conf.template
 RUN sed \

@@ -1,5 +1,6 @@
 import asyncio
 import fcntl
+import logging
 import os
 import pty
 import select
@@ -7,15 +8,25 @@ import signal
 import struct
 import termios
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from app.core.auth import verify_ws_token
+
+logger = logging.getLogger("tiup_visualizer")
 
 router = APIRouter()
 
 
 @router.websocket("/ws/terminal")
-async def terminal_websocket(websocket: WebSocket):
+async def terminal_websocket(websocket: WebSocket, token: str = Query(default=None)):
     """WebSocket endpoint that provides an interactive bash terminal via PTY."""
+    # Verify authentication token
+    username = verify_ws_token(token)
+    if username is None:
+        await websocket.close(code=4001, reason="Authentication required")
+        return
+
     await websocket.accept()
+    logger.info(f"WebSocket terminal opened by user: {username}")
 
     # Create a pseudo-terminal
     master_fd, slave_fd = pty.openpty()
@@ -152,6 +163,7 @@ async def terminal_websocket(websocket: WebSocket):
             except (asyncio.CancelledError, Exception):
                 pass
             cleanup()
+            logger.info(f"WebSocket terminal closed for user: {username}")
             # Close websocket if still open
             try:
                 await websocket.close()

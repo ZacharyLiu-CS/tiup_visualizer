@@ -9,6 +9,19 @@
         <button v-if="selectedHost || selectedCluster" @click="clearSelection" class="clear-btn">
           Clear Selection
         </button>
+        <div class="header-divider"></div>
+        <div class="user-info">
+          <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16">
+            <path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/>
+          </svg>
+          <span>{{ username }}</span>
+        </div>
+        <button class="logout-btn" @click="$emit('logout')" title="Sign Out">
+          <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14">
+            <path fill-rule="evenodd" d="M3 3a1 1 0 00-1 1v12a1 1 0 001 1h12a1 1 0 001-1V4a1 1 0 00-1-1H3zm7.707 3.293a1 1 0 010 1.414L9.414 9H17a1 1 0 110 2H9.414l1.293 1.293a1 1 0 01-1.414 1.414l-3-3a1 1 0 010-1.414l3-3a1 1 0 011.414 0z" clip-rule="evenodd"/>
+          </svg>
+          Sign Out
+        </button>
       </div>
     </header>
 
@@ -93,6 +106,13 @@ export default {
     ConnectionLines,
     WebTerminal
   },
+  props: {
+    username: {
+      type: String,
+      default: ''
+    }
+  },
+  emits: ['logout'],
   data() {
     return {
       hostRefs: {},
@@ -324,6 +344,41 @@ export default {
 .clear-btn:hover {
   background: white;
   color: #667eea;
+}
+
+.header-divider {
+  width: 1px;
+  height: 24px;
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 13px;
+}
+
+.logout-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.logout-btn:hover {
+  background: rgba(239, 68, 68, 0.7);
+  border-color: rgba(239, 68, 68, 0.8);
+  color: #fff;
 }
 
 .loading-overlay {

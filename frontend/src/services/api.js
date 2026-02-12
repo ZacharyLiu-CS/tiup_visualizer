@@ -10,13 +10,45 @@ const api = axios.create({
   timeout: 30000,
 })
 
+// Request interceptor: attach JWT token to all requests
+api.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('auth_token')
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`
+    }
+    return config
+  },
+  (error) => Promise.reject(error)
+)
+
+// Response interceptor: handle 401 by redirecting to login
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response && error.response.status === 401) {
+      localStorage.removeItem('auth_token')
+      localStorage.removeItem('auth_username')
+      // Dispatch a custom event so App.vue can react
+      window.dispatchEvent(new CustomEvent('auth:expired'))
+    }
+    return Promise.reject(error)
+  }
+)
+
+export const authAPI = {
+  login: (username, password) => api.post('/auth/login', { username, password }),
+  verify: (token) => api.get('/auth/verify', { params: { token } }),
+}
+
 export const clusterAPI = {
   getAllClusters: () => api.get('/clusters'),
   getClusterDetail: (clusterName) => api.get(`/clusters/${clusterName}`),
   getAllHosts: () => api.get('/hosts'),
   getHostClusters: (hostIp) => api.get(`/hosts/${hostIp}/clusters`),
   getLogFileUrl: (clusterName, componentId, filename, action = 'view') => {
-    return `${base}/api/v1/logs/${encodeURIComponent(clusterName)}/${encodeURIComponent(componentId)}/${encodeURIComponent(filename)}?action=${action}`
+    const token = localStorage.getItem('auth_token')
+    return `${base}/api/v1/logs/${encodeURIComponent(clusterName)}/${encodeURIComponent(componentId)}/${encodeURIComponent(filename)}?action=${action}&token=${encodeURIComponent(token || '')}`
   },
 }
 
