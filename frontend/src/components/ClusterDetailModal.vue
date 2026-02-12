@@ -66,8 +66,12 @@
                         {{ component.status }}
                       </span>
                     </td>
-                    <td class="path-cell">{{ component.data_dir }}</td>
-                    <td class="path-cell">{{ component.deploy_dir }}</td>
+                    <td class="path-cell" :title="component.data_dir">
+                      <div class="path-scroll">{{ component.data_dir }}</div>
+                    </td>
+                    <td class="path-cell" :title="component.deploy_dir">
+                      <div class="path-scroll">{{ component.deploy_dir }}</div>
+                    </td>
                     <td class="log-cell">
                       <div class="log-files" v-if="component.log_files && component.log_files.length">
                         <div class="log-file-row" v-for="logFile in component.log_files" :key="logFile.filename">
@@ -333,17 +337,41 @@ export default {
 }
 
 .path-cell {
+  max-width: 280px;
+  min-width: 150px;
+}
+
+.path-scroll {
   font-family: monospace;
   font-size: 11px;
   color: #6b7280;
-  max-width: 250px;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 280px;
+  padding-bottom: 4px;
+}
+
+.path-scroll::-webkit-scrollbar {
+  height: 4px;
+}
+
+.path-scroll::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 2px;
+}
+
+.path-scroll::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 2px;
+}
+
+.path-scroll::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
 }
 
 .log-cell {
-  min-width: 200px;
+  min-width: 280px;
   white-space: nowrap;
 }
 
@@ -363,7 +391,8 @@ export default {
   font-family: monospace;
   font-size: 11px;
   color: #6b7280;
-  max-width: 120px;
+  width: 130px;
+  min-width: 130px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -384,6 +413,9 @@ export default {
   cursor: pointer;
   transition: all 0.2s;
   white-space: nowrap;
+  width: 68px;
+  text-align: center;
+  box-sizing: border-box;
 }
 
 .log-btn-view {
