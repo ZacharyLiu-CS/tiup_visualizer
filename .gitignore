@@ -24,4 +24,7 @@ dist/
 # Build
 build/
 *.egg-info/
+
+# Log
 backend/logs/*.log
+backend/logs/tiup-visualizer.log

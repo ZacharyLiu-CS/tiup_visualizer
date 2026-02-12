@@ -53,4 +53,12 @@ export const clusterAPI = {
   },
 }
 
+export const serverLogAPI = {
+  listLogs: () => api.get('/server-logs'),
+  getLogUrl: (filename, action = 'view') => {
+    const token = localStorage.getItem('auth_token')
+    return `${base}/api/v1/server-logs/${encodeURIComponent(filename)}?action=${action}&token=${encodeURIComponent(token || '')}`
+  },
+}
+
 export default api

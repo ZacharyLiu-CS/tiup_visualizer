@@ -6,6 +6,9 @@
         <button @click="showTerminal = true" class="terminal-btn" title="Open Terminal">
           &#9002; Terminal
         </button>
+        <button @click="showServerLogs = true" class="server-log-btn" title="View Backend Logs">
+          &#128196; Server Logs
+        </button>
         <button v-if="selectedHost || selectedCluster" @click="clearSelection" class="clear-btn">
           Clear Selection
         </button>
@@ -27,6 +30,9 @@
 
     <!-- Web Terminal -->
     <WebTerminal :visible="showTerminal" @close="showTerminal = false" />
+
+    <!-- Server Log Modal -->
+    <ServerLogModal :visible="showServerLogs" @close="showServerLogs = false" />
 
     <div class="loading-overlay" v-if="loading">
       <div class="spinner"></div>
@@ -96,6 +102,7 @@ import ClusterCard from '../components/ClusterCard.vue'
 import ClusterDetailModal from '../components/ClusterDetailModal.vue'
 import ConnectionLines from '../components/ConnectionLines.vue'
 import WebTerminal from '../components/WebTerminal.vue'
+import ServerLogModal from '../components/ServerLogModal.vue'
 
 export default {
   name: 'HomeView',
@@ -104,7 +111,8 @@ export default {
     ClusterCard,
     ClusterDetailModal,
     ConnectionLines,
-    WebTerminal
+    WebTerminal,
+    ServerLogModal
   },
   props: {
     username: {
@@ -118,7 +126,8 @@ export default {
       hostRefs: {},
       clusterRefs: {},
       connectionLines: [],
-      showTerminal: false
+      showTerminal: false,
+      showServerLogs: false
     }
   },
   computed: {
@@ -322,6 +331,28 @@ export default {
 }
 
 .terminal-btn:hover {
+  background: rgba(255, 255, 255, 0.25);
+  border-color: white;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.server-log-btn {
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  color: white;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 14px;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.server-log-btn:hover {
   background: rgba(255, 255, 255, 0.25);
   border-color: white;
   transform: translateY(-1px);
