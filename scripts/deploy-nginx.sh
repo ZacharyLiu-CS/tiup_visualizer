@@ -125,6 +125,8 @@ echo -e "${GREEN}Python environment ready!${NC}"
 echo -e "${YELLOW}Deploying files to ${DEPLOY_DIR}...${NC}"
 
 sudo mkdir -p "$DEPLOY_DIR"
+sudo mkdir -p "$DEPLOY_DIR/logs"
+sudo chown "$RUN_USER":"$(id -gn "$RUN_USER")" "$DEPLOY_DIR/logs"
 
 # Copy backend app
 sudo cp -r "$BUILD_DIR/app" "$DEPLOY_DIR/"
