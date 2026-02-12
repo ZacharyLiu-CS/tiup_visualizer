@@ -1,6 +1,5 @@
 <template>
-  <!-- Use v-show instead of v-if to keep DOM alive for proper cleanup -->
-  <div class="terminal-overlay" v-show="visible" @click.self="handleClose">
+  <div v-if="mode === 'float'" class="terminal-overlay" v-show="visible" @click.self="handleClose">
     <div class="terminal-window" :class="{ maximized: isMaximized }">
       <div class="terminal-titlebar">
         <div class="terminal-title">
@@ -22,6 +21,25 @@
       </div>
     </div>
   </div>
+
+  <transition :name="slideTransitionName" v-else>
+    <div v-show="visible" class="terminal-panel" :class="panelClass">
+      <div class="terminal-titlebar">
+        <div class="terminal-title">
+          <span class="terminal-icon">&#9002;</span>
+          Web Terminal
+        </div>
+        <div class="terminal-controls">
+          <button class="ctrl-btn close-btn" @click="handleClose" title="Close">&times;</button>
+        </div>
+      </div>
+      <div class="terminal-body" ref="terminalContainer"></div>
+      <div class="terminal-statusbar">
+        <span class="status-dot" :class="{ connected: wsConnected }"></span>
+        <span>{{ wsConnected ? 'Connected' : 'Disconnected' }}</span>
+      </div>
+    </div>
+  </transition>
 </template>
 
 <script>
@@ -36,6 +54,11 @@ export default {
     visible: {
       type: Boolean,
       default: false
+    },
+    mode: {
+      type: String,
+      default: 'top',
+      validator: (v) => ['top', 'right', 'bottom', 'left', 'float'].includes(v)
     }
   },
   emits: ['close'],
@@ -51,6 +74,20 @@ export default {
       _initTimer: null
     }
   },
+  computed: {
+    panelClass() {
+      return `panel-${this.mode}`
+    },
+    slideTransitionName() {
+      const map = {
+        top: 'slide-top',
+        right: 'slide-right',
+        bottom: 'slide-bottom',
+        left: 'slide-left'
+      }
+      return map[this.mode] || 'slide-top'
+    }
+  },
   watch: {
     visible(val) {
       if (val) {
@@ -58,6 +95,13 @@ export default {
         this.$nextTick(() => this.initTerminal())
       } else {
         this.destroyTerminal()
+      }
+    },
+    mode() {
+      if (this.visible) {
+        this.destroyTerminal()
+        this._destroyed = false
+        this.$nextTick(() => this.initTerminal())
       }
     }
   },
@@ -107,7 +151,6 @@ export default {
       const container = this.$refs.terminalContainer
       this.terminal.open(container)
 
-      // Fit after a short delay to ensure DOM is laid out; track the timer for cleanup
       this._initTimer = setTimeout(() => {
         this._initTimer = null
         if (this._destroyed || !this.fitAddon) return
@@ -115,14 +158,12 @@ export default {
         this.connectWebSocket()
       }, 100)
 
-      // Handle user input
       this.terminal.onData(data => {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
           this.ws.send(data)
         }
       })
 
-      // Watch for container resize
       this.resizeObserver = new ResizeObserver(() => {
         if (this._destroyed) return
         if (this.fitAddon && this.terminal) {
@@ -194,19 +235,16 @@ export default {
     destroyTerminal() {
       this._destroyed = true
 
-      // Cancel pending init timer
       if (this._initTimer) {
         clearTimeout(this._initTimer)
         this._initTimer = null
       }
 
-      // Disconnect resize observer first
       if (this.resizeObserver) {
         this.resizeObserver.disconnect()
         this.resizeObserver = null
       }
 
-      // Close WebSocket — nullify callbacks to prevent post-destroy side effects
       if (this.ws) {
         this.ws.onopen = null
         this.ws.onmessage = null
@@ -216,7 +254,6 @@ export default {
         this.ws = null
       }
 
-      // Dispose xterm instance
       if (this.terminal) {
         this.terminal.dispose()
         this.terminal = null
@@ -234,6 +271,7 @@ export default {
 </script>
 
 <style scoped>
+/* ===== Float (overlay) mode ===== */
 .terminal-overlay {
   position: fixed;
   top: 0;
@@ -269,6 +307,88 @@ export default {
   border-radius: 8px;
 }
 
+/* ===== Panel (slide) modes ===== */
+.terminal-panel {
+  position: fixed;
+  z-index: 999;
+  background: #1e1e2e;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  border: 1px solid #313244;
+}
+
+.terminal-panel.panel-top {
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 50vh;
+  border-bottom: 2px solid #89b4fa;
+}
+
+.terminal-panel.panel-bottom {
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 50vh;
+  border-top: 2px solid #89b4fa;
+}
+
+.terminal-panel.panel-left {
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 50vw;
+  border-right: 2px solid #89b4fa;
+}
+
+.terminal-panel.panel-right {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 50vw;
+  border-left: 2px solid #89b4fa;
+}
+
+/* ===== Slide transitions ===== */
+.slide-top-enter-active,
+.slide-top-leave-active {
+  transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.slide-top-enter-from,
+.slide-top-leave-to {
+  transform: translateY(-100%);
+}
+
+.slide-bottom-enter-active,
+.slide-bottom-leave-active {
+  transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.slide-bottom-enter-from,
+.slide-bottom-leave-to {
+  transform: translateY(100%);
+}
+
+.slide-left-enter-active,
+.slide-left-leave-active {
+  transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.slide-left-enter-from,
+.slide-left-leave-to {
+  transform: translateX(-100%);
+}
+
+.slide-right-enter-active,
+.slide-right-leave-active {
+  transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.slide-right-enter-from,
+.slide-right-leave-to {
+  transform: translateX(100%);
+}
+
+/* ===== Shared styles ===== */
 .terminal-titlebar {
   display: flex;
   justify-content: space-between;
