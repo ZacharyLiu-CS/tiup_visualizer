@@ -17,7 +17,7 @@
       <button @click="refresh">Retry</button>
     </div>
 
-    <div class="main-container" v-if="!loading && !error">
+    <div class="main-container" ref="mainContainer" v-if="!loading && !error">
       <!-- Hosts Section (Top) -->
       <section class="hosts-section">
         <h2 class="section-title">Physical Hosts</h2>
@@ -166,20 +166,54 @@ export default {
       this.connectionLines = []
       
       if (this.selectedHost) {
-        // Draw lines from selected host to its clusters
         const highlightedClusters = this.highlightedClusters
-        highlightedClusters.forEach(clusterName => {
-          const line = this.calculateLine(this.selectedHost, clusterName, true)
-          if (line) this.connectionLines.push(line)
-        })
+        const lines = highlightedClusters.map(clusterName => 
+          this.calculateLine(this.selectedHost, clusterName, true)
+        ).filter(Boolean)
+        this.distributeLines(lines)
       } else if (this.selectedCluster) {
-        // Draw lines from selected cluster to its hosts
         const highlightedHosts = this.highlightedHosts
-        highlightedHosts.forEach(host => {
-          const line = this.calculateLine(host, this.selectedCluster, false)
-          if (line) this.connectionLines.push(line)
-        })
+        const lines = highlightedHosts.map(host => 
+          this.calculateLine(host, this.selectedCluster, false)
+        ).filter(Boolean)
+        this.distributeLines(lines)
       }
+    },
+    distributeLines(lines) {
+      if (!lines.length) return
+      const container = this.$refs.mainContainer
+      if (!container) return
+      const containerRect = container.getBoundingClientRect()
+      const hostsGrid = this.$refs.hostsGrid
+      const clustersGrid = this.$refs.clustersGrid
+      if (!hostsGrid || !clustersGrid) {
+        this.connectionLines = lines
+        return
+      }
+      const hostsRect = hostsGrid.getBoundingClientRect()
+      const clustersRect = clustersGrid.getBoundingClientRect()
+      const gapTop = hostsRect.bottom - containerRect.top + 8
+      const gapBottom = clustersRect.top - containerRect.top - 8
+      const gapHeight = gapBottom - gapTop
+
+      // Group lines by cluster row (same y2 = same row)
+      const rowGroups = {}
+      lines.forEach(line => {
+        const rowKey = Math.round(line.y2)
+        if (!rowGroups[rowKey]) rowGroups[rowKey] = []
+        rowGroups[rowKey].push(line)
+      })
+
+      // Assign one midY per distinct row
+      const rowKeys = Object.keys(rowGroups).sort((a, b) => Number(a) - Number(b))
+      const rowCount = rowKeys.length
+      rowKeys.forEach((rowKey, i) => {
+        const midY = gapTop + (gapHeight * (i + 1)) / (rowCount + 1)
+        rowGroups[rowKey].forEach(line => {
+          line.path = `M${line.x1},${line.y1} V${midY} H${line.x2} V${line.y2}`
+        })
+      })
+      this.connectionLines = lines
     },
     calculateLine(hostKey, clusterName, fromHost) {
       const hostEl = this.hostRefs[hostKey]?.$el
@@ -187,16 +221,22 @@ export default {
       
       if (!hostEl || !clusterEl) return null
 
+      const container = this.$refs.mainContainer
+      if (!container) return null
+
       const hostRect = hostEl.getBoundingClientRect()
       const clusterRect = clusterEl.getBoundingClientRect()
-      const container = this.$el.getBoundingClientRect()
+      const containerRect = container.getBoundingClientRect()
+
+      const x1 = hostRect.left + hostRect.width / 2 - containerRect.left
+      const y1 = hostRect.bottom - containerRect.top
+      const x2 = clusterRect.left + clusterRect.width / 2 - containerRect.left
+      const y2 = clusterRect.top - containerRect.top
 
       return {
-        x1: hostRect.left + hostRect.width / 2 - container.left,
-        y1: hostRect.bottom - container.top,
-        x2: clusterRect.left + clusterRect.width / 2 - container.left,
-        y2: clusterRect.top - container.top,
-        color: fromHost ? '#3b82f6' : '#8b5cf6'
+        x1, y1, x2, y2,
+        color: fromHost ? '#3b82f6' : '#8b5cf6',
+        path: ''
       }
     }
   }
@@ -303,7 +343,6 @@ export default {
   flex-wrap: wrap;
   gap: 16px;
   position: relative;
-  z-index: 10;
 }
 
 .clusters-section {
@@ -315,6 +354,5 @@ export default {
   flex-wrap: wrap;
   gap: 16px;
   position: relative;
-  z-index: 10;
 }
 </style>
