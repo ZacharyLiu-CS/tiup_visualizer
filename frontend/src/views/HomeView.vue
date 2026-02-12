@@ -48,7 +48,8 @@
             :index="clusterIndexMap[cluster.name]"
             :isSelected="selectedCluster === cluster.name"
             :isHighlighted="highlightedClusters.includes(cluster.name)"
-            @select="handleClusterSelect"
+            @connect="handleClusterConnect"
+            @detail="handleClusterDetail"
             :ref="el => { if (el) clusterRefs[cluster.name] = el }"
           />
         </div>
@@ -135,7 +136,8 @@ export default {
       'fetchClusters',
       'fetchHosts',
       'selectHost',
-      'selectCluster',
+      'selectClusterForConnect',
+      'selectClusterForDetail',
       'clearSelection',
       'getHostsForCluster'
     ]),
@@ -152,12 +154,15 @@ export default {
         this.selectHost(host)
       }
     },
-    async handleClusterSelect(clusterName) {
+    handleClusterConnect(clusterName) {
       if (this.selectedCluster === clusterName) {
         this.clearSelection()
       } else {
-        await this.selectCluster(clusterName)
+        this.selectClusterForConnect(clusterName)
       }
+    },
+    async handleClusterDetail(clusterName) {
+      await this.selectClusterForDetail(clusterName)
     },
     closeClusterDetail() {
       this.clearSelection()

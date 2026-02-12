@@ -61,7 +61,13 @@ export const useClusterStore = defineStore('cluster', {
       this.clusterDetail = null
     },
 
-    async selectCluster(clusterName) {
+    selectClusterForConnect(clusterName) {
+      this.selectedCluster = clusterName
+      this.selectedHost = null
+      this.clusterDetail = null
+    },
+
+    async selectClusterForDetail(clusterName) {
       this.selectedCluster = clusterName
       this.selectedHost = null
       await this.fetchClusterDetail(clusterName)
