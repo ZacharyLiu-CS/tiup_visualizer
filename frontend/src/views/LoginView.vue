@@ -42,12 +42,25 @@
               id="password"
               ref="passwordInput"
               v-model="password"
-              type="password"
-              class="form-input"
+              :type="showPassword ? 'text' : 'password'"
+              class="form-input form-input-password"
               placeholder="Enter password"
               autocomplete="current-password"
               :disabled="loading"
             />
+            <button
+              type="button"
+              class="toggle-password-btn"
+              tabindex="-1"
+              @click="showPassword = !showPassword"
+            >
+              <svg v-if="!showPassword" viewBox="0 0 20 20" fill="currentColor" width="18" height="18">
+                <path d="M10 3C5 3 1.73 7.11 1 10c.73 2.89 4 7 9 7s8.27-4.11 9-7c-.73-2.89-4-7-9-7zm0 12a5 5 0 110-10 5 5 0 010 10zm0-8a3 3 0 100 6 3 3 0 000-6z"/>
+              </svg>
+              <svg v-else viewBox="0 0 20 20" fill="currentColor" width="18" height="18">
+                <path d="M3.707 2.293a1 1 0 00-1.414 1.414l14 14a1 1 0 001.414-1.414l-1.473-1.473C18.1 13.518 19.466 11.5 20 10c-.73-2.89-4-7-9-7a9.77 9.77 0 00-4.518 1.068L3.707 2.293zM10 5a5 5 0 014.546 7.132l-1.57-1.57A3 3 0 0010 7a2.98 2.98 0 00-.562.053L7.974 5.59A4.98 4.98 0 0110 5zM4.228 6.642L5.89 8.304A4.99 4.99 0 005 10a5 5 0 006.696 4.696l1.463 1.463C12.15 16.69 11.1 17 10 17c-5 0-8.27-4.11-9-7 .458-1.81 1.706-3.704 3.228-4.358zM7 10a3 3 0 003.38 2.966L7.034 9.62A2.99 2.99 0 007 10z"/>
+              </svg>
+            </button>
           </div>
         </div>
 
@@ -77,6 +90,7 @@ export default {
     return {
       username: '',
       password: '',
+      showPassword: false,
       error: '',
       loading: false,
     }
@@ -187,6 +201,29 @@ export default {
   font-size: 14px;
   outline: none;
   transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.form-input-password {
+  padding-right: 42px;
+}
+
+.toggle-password-btn {
+  position: absolute;
+  right: 10px;
+  background: none;
+  border: none;
+  color: #475569;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: color 0.2s;
+}
+
+.toggle-password-btn:hover {
+  color: #94a3b8;
 }
 
 .form-input::placeholder {
