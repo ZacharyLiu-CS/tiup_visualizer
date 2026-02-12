@@ -29,6 +29,8 @@
             :hostInfo="hostInfo"
             :isSelected="selectedHost === host"
             :isHighlighted="highlightedHosts.includes(host)"
+            :clusterIndexMap="clusterIndexMap"
+            :allClusters="clusters"
             @select="handleHostSelect"
             :ref="el => { if (el) hostRefs[host] = el }"
           />
@@ -43,6 +45,7 @@
             v-for="cluster in clusters" 
             :key="cluster.name"
             :cluster="cluster"
+            :index="clusterIndexMap[cluster.name]"
             :isSelected="selectedCluster === cluster.name"
             :isHighlighted="highlightedClusters.includes(cluster.name)"
             @select="handleClusterSelect"
@@ -96,6 +99,13 @@ export default {
       'loading',
       'error'
     ]),
+    clusterIndexMap() {
+      const map = {}
+      this.clusters.forEach((cluster, idx) => {
+        map[cluster.name] = idx + 1
+      })
+      return map
+    },
     highlightedHosts() {
       if (this.selectedCluster) {
         return this.getHostsForCluster(this.selectedCluster)

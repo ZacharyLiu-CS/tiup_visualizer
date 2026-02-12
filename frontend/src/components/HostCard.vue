@@ -5,6 +5,15 @@
          'highlighted': isHighlighted 
        }"
        @click="handleClick">
+    <div class="cluster-badges" v-if="clusterBadges.length">
+      <span 
+        v-for="badge in clusterBadges" 
+        :key="badge.index"
+        class="cluster-badge"
+        :style="{ background: badge.color, borderColor: badge.color }"
+        :title="badge.name"
+      >{{ badge.index }}</span>
+    </div>
     <div class="host-icon">
       <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
         <rect x="4" y="8" width="40" height="32" rx="2" stroke="currentColor" stroke-width="2"/>
@@ -45,12 +54,44 @@ export default {
     isHighlighted: {
       type: Boolean,
       default: false
+    },
+    clusterIndexMap: {
+      type: Object,
+      default: () => ({})
+    },
+    allClusters: {
+      type: Array,
+      default: () => []
     }
   },
   emits: ['select'],
+  computed: {
+    clusterBadges() {
+      if (!this.hostInfo.clusters || !this.allClusters.length) return []
+      return this.hostInfo.clusters
+        .map(clusterName => {
+          const cluster = this.allClusters.find(c => c.name === clusterName)
+          const index = this.clusterIndexMap[clusterName]
+          if (!index) return null
+          return {
+            index,
+            name: clusterName,
+            color: this.getStatusColor(cluster ? cluster.status : '')
+          }
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.index - b.index)
+    }
+  },
   methods: {
     handleClick() {
       this.$emit('select', this.host)
+    },
+    getStatusColor(status) {
+      if (status === 'healthy') return '#22c55e'
+      if (status === 'partial') return '#eab308'
+      if (status === 'unhealthy') return '#9ca3af'
+      return '#ef4444'
     }
   }
 }
@@ -68,6 +109,29 @@ export default {
   cursor: pointer;
   transition: all 0.3s ease;
   min-width: 140px;
+}
+
+.cluster-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: center;
+  margin-bottom: 8px;
+  width: 100%;
+}
+
+.cluster-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: white;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  flex-shrink: 0;
 }
 
 .host-card:hover {

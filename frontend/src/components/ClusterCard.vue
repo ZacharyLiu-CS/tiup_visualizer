@@ -5,6 +5,10 @@
          'highlighted': isHighlighted 
        }"
        @click="handleClick">
+    <span 
+      v-if="index" 
+      class="cluster-index-badge"
+    >{{ index }}</span>
     <div class="cluster-icon">
       <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
         <circle cx="24" cy="12" r="6" stroke="currentColor" stroke-width="2"/>
@@ -30,6 +34,10 @@ export default {
     cluster: {
       type: Object,
       required: true
+    },
+    index: {
+      type: Number,
+      default: null
     },
     isSelected: {
       type: Boolean,
@@ -72,6 +80,26 @@ export default {
   transition: all 0.3s ease;
   min-width: 160px;
   overflow: hidden;
+  position: relative;
+}
+
+.cluster-index-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: #6b7280;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  z-index: 1;
+  background: transparent;
+  border: 2px solid #d1d5db;
 }
 
 .cluster-card:hover {
