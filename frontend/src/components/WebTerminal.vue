@@ -1,45 +1,56 @@
 <template>
-  <div v-if="mode === 'float'" class="terminal-overlay" v-show="visible" @click.self="handleClose">
-    <div class="terminal-window" :class="{ maximized: isMaximized }">
-      <div class="terminal-titlebar">
-        <div class="terminal-title">
-          <span class="terminal-icon">&#9002;</span>
-          Web Terminal
-        </div>
-        <div class="terminal-controls">
-          <button class="ctrl-btn maximize-btn" @click="toggleMaximize" :title="isMaximized ? 'Restore' : 'Maximize'">
-            <span v-if="isMaximized">&#9645;</span>
-            <span v-else>&#9633;</span>
-          </button>
-          <button class="ctrl-btn close-btn" @click="handleClose" title="Close">&times;</button>
+  <!-- Float (overlay) mode -->
+  <teleport to="body">
+    <transition name="fade">
+      <div v-if="mode === 'float' && visible" class="terminal-overlay" @click.self="handleClose">
+        <div class="terminal-window" :class="{ maximized: isMaximized }">
+          <div class="terminal-titlebar">
+            <div class="terminal-title">
+              <span class="terminal-icon">&#9002;</span>
+              Web Terminal
+            </div>
+            <div class="terminal-controls">
+              <button class="ctrl-btn maximize-btn" @click="toggleMaximize" :title="isMaximized ? 'Restore' : 'Maximize'">
+                <span v-if="isMaximized">&#9645;</span>
+                <span v-else>&#9633;</span>
+              </button>
+              <button class="ctrl-btn close-btn" @click="handleClose" title="Close">&times;</button>
+            </div>
+          </div>
+          <div class="terminal-body" ref="floatBody"></div>
+          <div class="terminal-statusbar">
+            <span class="status-dot" :class="{ connected: wsConnected }"></span>
+            <span>{{ wsConnected ? 'Connected' : 'Disconnected' }}</span>
+          </div>
         </div>
       </div>
-      <div class="terminal-body" ref="terminalContainer"></div>
-      <div class="terminal-statusbar">
-        <span class="status-dot" :class="{ connected: wsConnected }"></span>
-        <span>{{ wsConnected ? 'Connected' : 'Disconnected' }}</span>
-      </div>
-    </div>
-  </div>
+    </transition>
+  </teleport>
 
-  <transition :name="slideTransitionName" v-else>
-    <div v-show="visible" class="terminal-panel" :class="panelClass">
-      <div class="terminal-titlebar">
-        <div class="terminal-title">
-          <span class="terminal-icon">&#9002;</span>
-          Web Terminal
+  <!-- Panel (slide) modes -->
+  <teleport to="body">
+    <transition :name="slideTransitionName">
+      <div v-if="mode !== 'float' && visible" class="terminal-panel" :class="panelClass">
+        <div class="terminal-titlebar">
+          <div class="terminal-title">
+            <span class="terminal-icon">&#9002;</span>
+            Web Terminal
+          </div>
+          <div class="terminal-controls">
+            <button class="ctrl-btn close-btn" @click="handleClose" title="Close">&times;</button>
+          </div>
         </div>
-        <div class="terminal-controls">
-          <button class="ctrl-btn close-btn" @click="handleClose" title="Close">&times;</button>
+        <div class="terminal-body" ref="panelBody"></div>
+        <div class="terminal-statusbar">
+          <span class="status-dot" :class="{ connected: wsConnected }"></span>
+          <span>{{ wsConnected ? 'Connected' : 'Disconnected' }}</span>
         </div>
       </div>
-      <div class="terminal-body" ref="terminalContainer"></div>
-      <div class="terminal-statusbar">
-        <span class="status-dot" :class="{ connected: wsConnected }"></span>
-        <span>{{ wsConnected ? 'Connected' : 'Disconnected' }}</span>
-      </div>
-    </div>
-  </transition>
+    </transition>
+  </teleport>
+
+  <!-- Hidden persistent container that keeps the xterm DOM alive -->
+  <div ref="terminalHost" class="terminal-host-hidden"></div>
 </template>
 
 <script>
@@ -70,8 +81,7 @@ export default {
       wsConnected: false,
       isMaximized: false,
       resizeObserver: null,
-      _destroyed: false,
-      _initTimer: null
+      _initialized: false
     }
   },
   computed: {
@@ -91,28 +101,33 @@ export default {
   watch: {
     visible(val) {
       if (val) {
-        this._destroyed = false
-        this.$nextTick(() => this.initTerminal())
+        this.ensureInitialized()
+        this.$nextTick(() => this.attachTerminal())
       } else {
-        this.destroyTerminal()
+        // Just detach — move xterm DOM back to the hidden host.
+        // Do NOT destroy; we reuse on next open.
+        this.$nextTick(() => this.detachTerminal())
       }
     },
     mode() {
       if (this.visible) {
-        this.destroyTerminal()
-        this._destroyed = false
-        this.$nextTick(() => this.initTerminal())
+        // Mode changed while open: move xterm DOM to the new container
+        this.$nextTick(() => this.attachTerminal())
       }
     }
   },
   methods: {
     handleClose() {
-      this.destroyTerminal()
       this.$emit('close')
     },
 
-    initTerminal() {
-      if (this.terminal || this._destroyed) return
+    /**
+     * One-time initialization: create Terminal + WebSocket.
+     * Called on first open only; subsequent opens skip this.
+     */
+    ensureInitialized() {
+      if (this._initialized) return
+      this._initialized = true
 
       this.terminal = new Terminal({
         cursorBlink: true,
@@ -148,15 +163,8 @@ export default {
       this.terminal.loadAddon(this.fitAddon)
       this.terminal.loadAddon(new WebLinksAddon())
 
-      const container = this.$refs.terminalContainer
-      this.terminal.open(container)
-
-      this._initTimer = setTimeout(() => {
-        this._initTimer = null
-        if (this._destroyed || !this.fitAddon) return
-        this.fitAddon.fit()
-        this.connectWebSocket()
-      }, 100)
+      // Open xterm into the hidden host first (keeps DOM alive)
+      this.terminal.open(this.$refs.terminalHost)
 
       this.terminal.onData(data => {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -164,19 +172,67 @@ export default {
         }
       })
 
-      this.resizeObserver = new ResizeObserver(() => {
-        if (this._destroyed) return
-        if (this.fitAddon && this.terminal) {
-          this.fitAddon.fit()
+      this.connectWebSocket()
+    },
+
+    /**
+     * Move the xterm DOM element into the currently visible body container
+     * and fit to the new size.
+     */
+    attachTerminal() {
+      const target = this.mode === 'float' ? this.$refs.floatBody : this.$refs.panelBody
+      if (!target || !this.terminal) return
+
+      const xtermEl = this.$refs.terminalHost
+      if (!xtermEl) return
+
+      // Move the hidden host (which contains the xterm DOM) into the visible body
+      target.appendChild(xtermEl)
+
+      // Disconnect old observer if any
+      if (this.resizeObserver) {
+        this.resizeObserver.disconnect()
+      }
+
+      // Fit after the layout has settled
+      this.$nextTick(() => {
+        if (this.fitAddon) {
+          try { this.fitAddon.fit() } catch (_) { /* ignore */ }
           this.sendResize()
         }
       })
-      this.resizeObserver.observe(container)
+
+      // Observe the target for future resizes
+      this.resizeObserver = new ResizeObserver(() => {
+        if (this.fitAddon && this.terminal && this.visible) {
+          try { this.fitAddon.fit() } catch (_) { /* ignore */ }
+          this.sendResize()
+        }
+      })
+      this.resizeObserver.observe(target)
+    },
+
+    /**
+     * Move xterm DOM back to be a direct child of body (hidden via CSS).
+     * This keeps the DOM alive but invisible.
+     */
+    detachTerminal() {
+      const xtermEl = this.$refs.terminalHost
+      if (!xtermEl) return
+
+      // If it's currently inside a floatBody/panelBody, move it back to body
+      // so it stays alive but hidden. The CSS class .terminal-host-hidden hides it.
+      if (xtermEl.parentNode && xtermEl.parentNode !== document.body) {
+        document.body.appendChild(xtermEl)
+      }
+
+      if (this.resizeObserver) {
+        this.resizeObserver.disconnect()
+        this.resizeObserver = null
+      }
     },
 
     connectWebSocket() {
-      if (this._destroyed) return
-
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
       const basePath = import.meta.env.BASE_URL.replace(/\/+$/, '')
       const token = localStorage.getItem('auth_token') || ''
@@ -186,13 +242,12 @@ export default {
       this.ws.binaryType = 'arraybuffer'
 
       this.ws.onopen = () => {
-        if (this._destroyed) return
         this.wsConnected = true
         this.sendResize()
       }
 
       this.ws.onmessage = (event) => {
-        if (this._destroyed || !this.terminal) return
+        if (!this.terminal) return
         if (event.data instanceof ArrayBuffer) {
           this.terminal.write(new Uint8Array(event.data))
         } else {
@@ -201,7 +256,6 @@ export default {
       }
 
       this.ws.onclose = () => {
-        if (this._destroyed) return
         this.wsConnected = false
         if (this.terminal) {
           this.terminal.write('\r\n\x1b[31m[Connection closed]\x1b[0m\r\n')
@@ -209,7 +263,6 @@ export default {
       }
 
       this.ws.onerror = () => {
-        if (this._destroyed) return
         this.wsConnected = false
       }
     },
@@ -225,21 +278,17 @@ export default {
     toggleMaximize() {
       this.isMaximized = !this.isMaximized
       this.$nextTick(() => {
-        if (this.fitAddon && !this._destroyed) {
-          this.fitAddon.fit()
+        if (this.fitAddon && this.visible) {
+          try { this.fitAddon.fit() } catch (_) { /* ignore */ }
           this.sendResize()
         }
       })
     },
 
+    /**
+     * Full cleanup — only called on page unload (beforeUnmount).
+     */
     destroyTerminal() {
-      this._destroyed = true
-
-      if (this._initTimer) {
-        clearTimeout(this._initTimer)
-        this._initTimer = null
-      }
-
       if (this.resizeObserver) {
         this.resizeObserver.disconnect()
         this.resizeObserver = null
@@ -259,18 +308,58 @@ export default {
         this.terminal = null
       }
 
+      // Clean up the detached host element from body if it was moved there
+      const xtermEl = this.$refs.terminalHost
+      if (xtermEl && xtermEl.parentNode === document.body) {
+        document.body.removeChild(xtermEl)
+      }
+
       this.fitAddon = null
       this.wsConnected = false
       this.isMaximized = false
+      this._initialized = false
     }
   },
+  mounted() {
+    this._onBeforeUnload = () => this.destroyTerminal()
+    window.addEventListener('beforeunload', this._onBeforeUnload)
+  },
   beforeUnmount() {
+    window.removeEventListener('beforeunload', this._onBeforeUnload)
     this.destroyTerminal()
   }
 }
 </script>
 
 <style scoped>
+/* Hidden host that keeps xterm DOM alive when terminal panel/float is closed */
+.terminal-host-hidden {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* When attached inside a visible body, show it properly */
+.terminal-body .terminal-host-hidden {
+  position: static;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+/* ===== Fade transition for float overlay ===== */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.25s ease;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
 /* ===== Float (overlay) mode ===== */
 .terminal-overlay {
   position: fixed;

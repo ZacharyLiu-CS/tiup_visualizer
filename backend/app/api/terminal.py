@@ -7,6 +7,7 @@ import select
 import signal
 import struct
 import termios
+import time
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from app.core.auth import verify_ws_token
@@ -14,6 +15,10 @@ from app.core.auth import verify_ws_token
 logger = logging.getLogger("tiup_visualizer")
 
 router = APIRouter()
+
+# Idle timeout in seconds: if no data flows in either direction for this long,
+# the server closes the PTY and WebSocket automatically.
+IDLE_TIMEOUT = 600  # 10 minutes
 
 
 @router.websocket("/ws/terminal")
@@ -67,6 +72,12 @@ async def terminal_websocket(websocket: WebSocket, token: str = Query(default=No
 
         # Track whether cleanup has been done to avoid double-cleanup
         cleaned_up = False
+        # Shared mutable timestamp for idle detection
+        last_activity = time.monotonic()
+
+        def touch_activity():
+            nonlocal last_activity
+            last_activity = time.monotonic()
 
         def cleanup():
             nonlocal cleaned_up
@@ -93,7 +104,6 @@ async def terminal_websocket(websocket: WebSocket, token: str = Query(default=No
                         return
                 except (OSError, ChildProcessError):
                     return
-                import time
                 time.sleep(0.1)
             # Force kill if SIGTERM didn't work within 1 second
             try:
@@ -116,19 +126,51 @@ async def terminal_websocket(websocket: WebSocket, token: str = Query(default=No
                             if not data:
                                 # PTY closed (child exited)
                                 break
+                            touch_activity()
                             await websocket.send_bytes(data)
                     except OSError:
                         break
             except (WebSocketDisconnect, Exception):
                 pass
 
+        async def idle_watchdog():
+            """Periodically check for idle timeout and force-close if exceeded."""
+            try:
+                while not cleaned_up:
+                    await asyncio.sleep(30)  # check every 30s
+                    if cleaned_up:
+                        break
+                    elapsed = time.monotonic() - last_activity
+                    if elapsed >= IDLE_TIMEOUT:
+                        logger.info(
+                            f"Terminal idle timeout ({IDLE_TIMEOUT}s) for user: {username}, closing"
+                        )
+                        # Notify client before closing
+                        try:
+                            await websocket.send_text(
+                                "\r\n\x1b[33m[Session timed out due to inactivity]\x1b[0m\r\n"
+                            )
+                        except Exception:
+                            pass
+                        # Close websocket to trigger the finally cleanup
+                        try:
+                            await websocket.close(code=4002, reason="Idle timeout")
+                        except Exception:
+                            pass
+                        break
+            except (asyncio.CancelledError, Exception):
+                pass
+
         read_task = asyncio.ensure_future(read_from_pty())
+        idle_task = asyncio.ensure_future(idle_watchdog())
 
         try:
             while True:
                 message = await websocket.receive()
                 if message.get("type") == "websocket.disconnect":
                     break
+
+                touch_activity()
 
                 if "text" in message:
                     text = message["text"]
@@ -158,8 +200,13 @@ async def terminal_websocket(websocket: WebSocket, token: str = Query(default=No
             pass
         finally:
             read_task.cancel()
+            idle_task.cancel()
             try:
                 await read_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            try:
+                await idle_task
             except (asyncio.CancelledError, Exception):
                 pass
             cleanup()
