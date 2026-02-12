@@ -1,6 +1,7 @@
 #!/bin/bash
 
 set -e
+set -m  # Enable job control for process group management
 
 echo "======================================"
 echo "TiUP Visualizer - One-Click Start"
@@ -74,15 +75,41 @@ fi
 
 echo -e "${GREEN}Frontend setup complete!${NC}"
 
+# Kill existing services if running
+echo -e "${YELLOW}Checking for existing services...${NC}"
+
+# Kill existing backend (uvicorn on port 8000)
+EXISTING_BACKEND=$(lsof -ti tcp:8000 2>/dev/null || true)
+if [ -n "$EXISTING_BACKEND" ]; then
+    echo -e "${YELLOW}Stopping existing backend (PID: $EXISTING_BACKEND)...${NC}"
+    kill $EXISTING_BACKEND 2>/dev/null || true
+    sleep 1
+    # Force kill if still alive
+    kill -9 $EXISTING_BACKEND 2>/dev/null || true
+fi
+
+# Kill existing frontend (vite on port 5173)
+EXISTING_FRONTEND=$(lsof -ti tcp:5173 2>/dev/null || true)
+if [ -n "$EXISTING_FRONTEND" ]; then
+    echo -e "${YELLOW}Stopping existing frontend (PID: $EXISTING_FRONTEND)...${NC}"
+    kill $EXISTING_FRONTEND 2>/dev/null || true
+    sleep 1
+    kill -9 $EXISTING_FRONTEND 2>/dev/null || true
+fi
+
 # Create a cleanup function
 cleanup() {
-    echo -e "\n${YELLOW}Shutting down...${NC}"
+    echo -e "\n${YELLOW}Shutting down all services...${NC}"
     if [ ! -z "$BACKEND_PID" ]; then
-        kill $BACKEND_PID 2>/dev/null || true
+        kill -- -$BACKEND_PID 2>/dev/null || kill $BACKEND_PID 2>/dev/null || true
     fi
     if [ ! -z "$FRONTEND_PID" ]; then
-        kill $FRONTEND_PID 2>/dev/null || true
+        kill -- -$FRONTEND_PID 2>/dev/null || kill $FRONTEND_PID 2>/dev/null || true
     fi
+    # Also kill by port as a fallback
+    lsof -ti tcp:8000 2>/dev/null | xargs kill -9 2>/dev/null || true
+    lsof -ti tcp:5173 2>/dev/null | xargs kill -9 2>/dev/null || true
+    echo -e "${GREEN}All services stopped.${NC}"
     exit 0
 }
 

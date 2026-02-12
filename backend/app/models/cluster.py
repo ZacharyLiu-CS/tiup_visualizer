@@ -8,6 +8,7 @@ class ClusterInfo(BaseModel):
     version: str
     path: str
     private_key: str
+    status: str = "unknown"  # healthy, partial, unhealthy, unknown
 
 
 class ComponentInfo(BaseModel):

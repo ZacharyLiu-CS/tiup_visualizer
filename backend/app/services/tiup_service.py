@@ -101,9 +101,30 @@ class TiUPService:
         return ClusterDetail(**cluster_info, components=components)
 
     def get_all_clusters(self) -> List[ClusterInfo]:
-        """Get all tiup clusters"""
+        """Get all tiup clusters with health status"""
         output = self.execute_command("tiup cluster list")
-        return self.parse_cluster_list(output)
+        clusters = self.parse_cluster_list(output)
+        
+        for cluster in clusters:
+            try:
+                detail = self.get_cluster_detail(cluster.name)
+                statuses = [comp.status for comp in detail.components]
+                if not statuses:
+                    cluster.status = "unknown"
+                else:
+                    has_up = any("Up" in s for s in statuses)
+                    all_up = all("Up" in s for s in statuses)
+                    if all_up:
+                        cluster.status = "healthy"
+                    elif has_up:
+                        cluster.status = "partial"
+                    else:
+                        cluster.status = "unhealthy"
+            except Exception as e:
+                print(f"Error getting cluster {cluster.name} status: {str(e)}")
+                cluster.status = "unknown"
+        
+        return clusters
 
     def get_cluster_detail(self, cluster_name: str) -> ClusterDetail:
         """Get detailed information of a specific cluster"""

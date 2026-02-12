@@ -19,6 +19,7 @@
       <div class="cluster-version">{{ cluster.version }}</div>
       <div class="cluster-user">User: {{ cluster.user }}</div>
     </div>
+    <div class="status-bar" :class="statusClass"></div>
   </div>
 </template>
 
@@ -40,6 +41,15 @@ export default {
     }
   },
   emits: ['select'],
+  computed: {
+    statusClass() {
+      const status = this.cluster.status
+      if (status === 'healthy') return 'status-healthy'
+      if (status === 'partial') return 'status-partial'
+      if (status === 'unhealthy') return 'status-unknown'
+      return 'status-unhealthy'
+    }
+  },
   methods: {
     handleClick() {
       this.$emit('select', this.cluster.name)
@@ -54,12 +64,14 @@ export default {
   flex-direction: column;
   align-items: center;
   padding: 16px;
+  padding-bottom: 0;
   background: white;
   border: 2px solid #e5e7eb;
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.3s ease;
   min-width: 160px;
+  overflow: hidden;
 }
 
 .cluster-card:hover {
@@ -115,5 +127,30 @@ export default {
   background: #f3f4f6;
   border-radius: 4px;
   display: inline-block;
+}
+
+.status-bar {
+  width: calc(100% + 4px);
+  height: 6px;
+  margin-top: 12px;
+  margin-left: -2px;
+  margin-right: -2px;
+  border-radius: 0 0 6px 6px;
+}
+
+.status-healthy {
+  background: #22c55e;
+}
+
+.status-partial {
+  background: #eab308;
+}
+
+.status-unhealthy {
+  background: #ef4444;
+}
+
+.status-unknown {
+  background: #9ca3af;
 }
 </style>
