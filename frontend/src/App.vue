@@ -6,9 +6,11 @@
 </template>
 
 <script>
-import HomeView from './views/HomeView.vue'
+import { defineAsyncComponent } from 'vue'
 import LoginView from './views/LoginView.vue'
 import { useAuthStore } from './stores/auth'
+
+const HomeView = defineAsyncComponent(() => import('./views/HomeView.vue'))
 
 export default {
   name: 'App',

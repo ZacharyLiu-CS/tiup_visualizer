@@ -42,6 +42,7 @@ export const authAPI = {
 }
 
 export const clusterAPI = {
+  getOverview: () => api.get('/overview'),
   getAllClusters: () => api.get('/clusters'),
   getClusterDetail: (clusterName) => api.get(`/clusters/${clusterName}`),
   getAllHosts: () => api.get('/hosts'),

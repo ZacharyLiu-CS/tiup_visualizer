@@ -164,6 +164,7 @@ export default {
   },
   methods: {
     ...mapActions(useClusterStore, [
+      'fetchOverview',
       'fetchClusters',
       'fetchHosts',
       'selectHost',
@@ -173,10 +174,7 @@ export default {
       'getHostsForCluster'
     ]),
     async refresh() {
-      await Promise.all([
-        this.fetchClusters(),
-        this.fetchHosts()
-      ])
+      await this.fetchOverview()
     },
     async handleHostSelect(host) {
       if (this.selectedHost === host) {

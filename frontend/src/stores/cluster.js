@@ -13,6 +13,21 @@ export const useClusterStore = defineStore('cluster', {
   }),
 
   actions: {
+    async fetchOverview() {
+      this.loading = true
+      this.error = null
+      try {
+        const response = await clusterAPI.getOverview()
+        this.clusters = response.data.clusters
+        this.hosts = response.data.hosts
+      } catch (error) {
+        this.error = error.message
+        console.error('Failed to fetch overview:', error)
+      } finally {
+        this.loading = false
+      }
+    },
+
     async fetchClusters() {
       this.loading = true
       this.error = null

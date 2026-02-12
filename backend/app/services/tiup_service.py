@@ -1,8 +1,12 @@
 import subprocess
 import re
 import os
-from typing import List, Dict
+import time
+import logging
+from typing import List, Dict, Optional
 from app.models.cluster import ClusterInfo, ClusterDetail, ComponentInfo, HostInfo, LogFileInfo
+
+logger = logging.getLogger("tiup_visualizer")
 
 # Mapping of component role to its log file names
 ROLE_LOG_FILES = {
@@ -14,8 +18,38 @@ ROLE_LOG_FILES = {
     'alertmanager': ['alertmanager.log'],
 }
 
+# Default cache TTL in seconds
+CACHE_TTL = 30
+
+
+class _Cache:
+    """Simple TTL cache for tiup command results."""
+
+    def __init__(self, ttl: int = CACHE_TTL):
+        self._ttl = ttl
+        self._store: Dict[str, tuple] = {}  # key -> (value, timestamp)
+
+    def get(self, key: str):
+        entry = self._store.get(key)
+        if entry is None:
+            return None
+        value, ts = entry
+        if time.time() - ts > self._ttl:
+            del self._store[key]
+            return None
+        return value
+
+    def set(self, key: str, value):
+        self._store[key] = (value, time.time())
+
+    def clear(self):
+        self._store.clear()
+
 
 class TiUPService:
+    def __init__(self):
+        self._cache = _Cache()
+
     @staticmethod
     def execute_command(command: str, timeout: int = 30) -> str:
         """Execute tiup command and return output"""
@@ -120,69 +154,93 @@ class TiUPService:
         
         return ClusterDetail(**cluster_info, components=components)
 
-    def get_all_clusters(self) -> List[ClusterInfo]:
-        """Get all tiup clusters with health status"""
+    def get_cluster_detail(self, cluster_name: str) -> ClusterDetail:
+        """Get detailed information of a specific cluster (cached)."""
+        cache_key = f"detail:{cluster_name}"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+        output = self.execute_command(f"tiup cluster display {cluster_name}")
+        detail = self.parse_cluster_display(output, cluster_name)
+        self._cache.set(cache_key, detail)
+        return detail
+
+    def _get_cluster_list(self) -> List[ClusterInfo]:
+        """Get raw cluster list from tiup (cached)."""
+        cache_key = "cluster_list"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
         output = self.execute_command("tiup cluster list")
         clusters = self.parse_cluster_list(output)
-        
+        self._cache.set(cache_key, clusters)
+        return clusters
+
+    def _get_all_details(self) -> Dict[str, ClusterDetail]:
+        """Fetch details for all clusters, reusing cache. Returns {name: detail}."""
+        clusters = self._get_cluster_list()
+        details = {}
         for cluster in clusters:
             try:
-                detail = self.get_cluster_detail(cluster.name)
+                details[cluster.name] = self.get_cluster_detail(cluster.name)
+            except Exception as e:
+                logger.warning(f"Error getting cluster {cluster.name} detail: {e}")
+        return details
+
+    def get_all_clusters(self) -> List[ClusterInfo]:
+        """Get all tiup clusters with health status."""
+        clusters = self._get_cluster_list()
+        # Make copies so we don't mutate the cached list
+        result = []
+        details = self._get_all_details()
+        for cluster in clusters:
+            c = ClusterInfo(
+                name=cluster.name,
+                user=cluster.user,
+                version=cluster.version,
+                path=cluster.path,
+                private_key=cluster.private_key,
+            )
+            detail = details.get(cluster.name)
+            if detail:
                 statuses = [comp.status for comp in detail.components]
                 if not statuses:
-                    cluster.status = "unknown"
+                    c.status = "unknown"
                 else:
                     has_up = any("Up" in s for s in statuses)
                     all_up = all("Up" in s for s in statuses)
                     if all_up:
-                        cluster.status = "healthy"
+                        c.status = "healthy"
                     elif has_up:
-                        cluster.status = "partial"
+                        c.status = "partial"
                     else:
-                        cluster.status = "unhealthy"
-            except Exception as e:
-                print(f"Error getting cluster {cluster.name} status: {str(e)}")
-                cluster.status = "unknown"
-        
-        return clusters
-
-    def get_cluster_detail(self, cluster_name: str) -> ClusterDetail:
-        """Get detailed information of a specific cluster"""
-        output = self.execute_command(f"tiup cluster display {cluster_name}")
-        return self.parse_cluster_display(output, cluster_name)
+                        c.status = "unhealthy"
+            else:
+                c.status = "unknown"
+            result.append(c)
+        return result
 
     def get_all_hosts(self) -> Dict[str, HostInfo]:
-        """Get all physical hosts and their components"""
+        """Get all physical hosts and their components."""
         hosts_map: Dict[str, HostInfo] = {}
-        clusters = self.get_all_clusters()
-        
-        for cluster in clusters:
-            try:
-                detail = self.get_cluster_detail(cluster.name)
-                for component in detail.components:
-                    if component.host not in hosts_map:
-                        hosts_map[component.host] = HostInfo(
-                            host=component.host,
-                            components=[],
-                            clusters=[]
-                        )
-                    
-                    hosts_map[component.host].components.append(component)
-                    if cluster.name not in hosts_map[component.host].clusters:
-                        hosts_map[component.host].clusters.append(cluster.name)
-            except Exception as e:
-                print(f"Error getting cluster {cluster.name} detail: {str(e)}")
-                continue
-        
+        details = self._get_all_details()
+
+        for cluster_name, detail in details.items():
+            for component in detail.components:
+                if component.host not in hosts_map:
+                    hosts_map[component.host] = HostInfo(
+                        host=component.host,
+                        components=[],
+                        clusters=[]
+                    )
+                hosts_map[component.host].components.append(component)
+                if cluster_name not in hosts_map[component.host].clusters:
+                    hosts_map[component.host].clusters.append(cluster_name)
+
         return hosts_map
 
     def get_log_file_path(self, cluster_name: str, component_id: str, filename: str) -> str:
-        """Get the local file path for a component's log file.
-        
-        The deploy_dir from tiup display gives the base path, e.g.:
-        /data3/cicd-deploy-prop-rw/tikv-18160
-        Log files are under {deploy_dir}/log/{filename}
-        """
+        """Get the local file path for a component's log file."""
         detail = self.get_cluster_detail(cluster_name)
         component = None
         for comp in detail.components:

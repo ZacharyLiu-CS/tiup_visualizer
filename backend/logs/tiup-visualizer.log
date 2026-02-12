@@ -75,3 +75,27 @@
 2026-02-12 14:56:35 - uvicorn.error - INFO - Waiting for application shutdown.
 2026-02-12 14:56:35 - uvicorn.error - INFO - Application shutdown complete.
 2026-02-12 14:56:35 - uvicorn.error - INFO - Finished server process [3823038]
+2026-02-12 15:00:48 - tiup_visualizer - INFO - TiUP Visualizer started
+2026-02-12 15:01:11 - tiup_visualizer - INFO - TiUP Visualizer started
+2026-02-12 15:01:11 - uvicorn.error - INFO - Started server process [3835937]
+2026-02-12 15:01:11 - uvicorn.error - INFO - Waiting for application startup.
+2026-02-12 15:01:11 - uvicorn.error - INFO - Application startup complete.
+2026-02-12 15:01:11 - uvicorn.error - INFO - Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-02-12 15:01:12 - uvicorn.access - INFO - 127.0.0.1:51778 - "GET /health HTTP/1.1" 200
+2026-02-12 15:01:29 - uvicorn.access - INFO - 127.0.0.1:49774 - "GET / HTTP/1.1" 200
+2026-02-12 15:01:30 - uvicorn.access - INFO - 127.0.0.1:49774 - "HEAD / HTTP/1.1" 405
+2026-02-12 15:01:30 - uvicorn.access - INFO - 127.0.0.1:49774 - "GET / HTTP/1.1" 200
+2026-02-12 15:01:57 - uvicorn.error - INFO - Shutting down
+2026-02-12 15:01:57 - uvicorn.error - INFO - Waiting for application shutdown.
+2026-02-12 15:01:57 - uvicorn.error - INFO - Application shutdown complete.
+2026-02-12 15:01:57 - uvicorn.error - INFO - Finished server process [3835937]
+2026-02-12 15:02:00 - tiup_visualizer - INFO - TiUP Visualizer started
+2026-02-12 15:02:00 - uvicorn.error - INFO - Started server process [3836985]
+2026-02-12 15:02:00 - uvicorn.error - INFO - Waiting for application startup.
+2026-02-12 15:02:00 - uvicorn.error - INFO - Application startup complete.
+2026-02-12 15:02:00 - uvicorn.error - INFO - Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-02-12 15:02:01 - uvicorn.access - INFO - 127.0.0.1:47532 - "GET /health HTTP/1.1" 200
+2026-02-12 15:02:08 - uvicorn.error - INFO - Shutting down
+2026-02-12 15:02:08 - uvicorn.error - INFO - Waiting for application shutdown.
+2026-02-12 15:02:08 - uvicorn.error - INFO - Application shutdown complete.
+2026-02-12 15:02:08 - uvicorn.error - INFO - Finished server process [3836985]

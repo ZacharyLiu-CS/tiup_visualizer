@@ -11,6 +11,17 @@ router = APIRouter()
 tiup_service = TiUPService()
 
 
+@router.get("/overview")
+async def get_overview(current_user: str = Depends(get_current_user)):
+    """Get clusters and hosts in a single call to avoid redundant tiup commands."""
+    try:
+        clusters = tiup_service.get_all_clusters()
+        hosts = tiup_service.get_all_hosts()
+        return {"clusters": clusters, "hosts": hosts}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/clusters", response_model=List[ClusterInfo])
 async def get_clusters(current_user: str = Depends(get_current_user)):
     """Get all TiUP clusters"""
