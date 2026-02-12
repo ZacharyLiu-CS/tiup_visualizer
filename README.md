@@ -261,6 +261,7 @@ BASE_PATH=/my-app ./build.sh
 # 构建完成后，build/ 目录包含：
 #   app/                  - 后端代码
 #   static/               - 前端静态文件
+#   config.yaml           - 认证和日志配置（可编辑用户名密码）
 #   start.sh              - 独立启动脚本
 #   deploy-nginx.sh       - Nginx 部署脚本
 #   nginx.conf.template   - Nginx 配置模板
@@ -332,7 +333,47 @@ cd scripts && ./build.sh
 
 ## Configuration
 
-Backend configuration in `backend/.env`:
+### 用户名和密码
+
+认证配置在 `backend/config.yaml` 中（两种部署模式共用同一配置格式）：
+
+```yaml
+auth:
+  username: "admin"          # 登录用户名
+  password: "easygraph"      # 登录密码
+  secret_key: "tiup-visualizer-secret-key-change-me-in-production"  # JWT 密钥，生产环境务必修改
+  token_expire_hours: 24     # Token 过期时间（小时）
+```
+
+**开发模式 (`scripts/start-dev.sh`)**：直接编辑 `backend/config.yaml`，重启服务即可生效。
+
+**生产构建 (`build/` 目录)**：`scripts/build.sh` 会将 `backend/config.yaml.example` 复制为 `build/config.yaml`。部署前直接编辑它：
+```bash
+vim build/config.yaml    # 修改用户名、密码、secret_key
+```
+
+**Nginx 部署模式 (`deploy-nginx.sh`)**：
+- 部署前：先修改 `build/config.yaml`（或修改源文件 `backend/config.yaml.example` 后重新 build）
+- 部署后：直接修改部署目录的配置文件并重启服务：
+  ```bash
+  sudo vim /var/www/tiup-visualizer/config.yaml
+  sudo systemctl restart tiup-visualizer
+  ```
+
+**Docker 模式**：在 `docker-compose.nginx.yml` 中挂载自定义配置文件：
+```yaml
+volumes:
+  - ./my-config.yaml:/app/config.yaml
+```
+
+配置文件查找顺序：
+1. 环境变量 `TIUP_VISUALIZER_CONFIG` 指定的路径
+2. `backend/config.yaml`（开发模式默认）
+3. `/etc/tiup-visualizer/config.yaml`
+
+### 其他配置
+
+`backend/.env` 中的应用配置：
 ```
 APP_NAME="TiUP Visualizer"
 DEBUG=True

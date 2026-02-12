@@ -69,6 +69,7 @@ mkdir -p "$BUILD_DIR"
 cp -r "$PROJECT_ROOT/backend/app" "$BUILD_DIR/"
 cp "$PROJECT_ROOT/backend/requirements.txt" "$BUILD_DIR/"
 cp "$PROJECT_ROOT/backend/.env.example" "$BUILD_DIR/.env"
+cp "$PROJECT_ROOT/backend/config.yaml.example" "$BUILD_DIR/config.yaml"
 
 # Copy frontend build
 cp -r "$PROJECT_ROOT/frontend/dist" "$BUILD_DIR/static"

@@ -23,6 +23,11 @@ cd tiup-visualizer
 
 **停止服务:** 按 `Ctrl+C`
 
+**默认账号:** 用户名 `admin`，密码 `easygraph`
+
+> 修改密码：编辑 `backend/config.yaml` 中的 `auth.username` 和 `auth.password` 字段，重启服务即可。
+> Nginx 部署模式下修改部署目录的配置：`sudo vim /var/www/tiup-visualizer/config.yaml && sudo systemctl restart tiup-visualizer`
+
 ---
 
 ## 系统要求

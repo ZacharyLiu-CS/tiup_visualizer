@@ -134,6 +134,13 @@ if [ ! -f "$DEPLOY_DIR/.env" ]; then
     sudo cp "$BUILD_DIR/.env" "$DEPLOY_DIR/.env"
 fi
 
+# Copy config.yaml (only if not already deployed, to preserve user edits)
+if [ ! -f "$DEPLOY_DIR/config.yaml" ]; then
+    if [ -f "$BUILD_DIR/config.yaml" ]; then
+        sudo cp "$BUILD_DIR/config.yaml" "$DEPLOY_DIR/config.yaml"
+    fi
+fi
+
 # Set ROOT_PATH in .env for FastAPI to know its prefix
 sudo sed -i "s|^ROOT_PATH=.*|ROOT_PATH=\"${PATH_PREFIX}\"|" "$DEPLOY_DIR/.env"
 
