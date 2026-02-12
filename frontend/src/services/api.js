@@ -15,6 +15,9 @@ export const clusterAPI = {
   getClusterDetail: (clusterName) => api.get(`/clusters/${clusterName}`),
   getAllHosts: () => api.get('/hosts'),
   getHostClusters: (hostIp) => api.get(`/hosts/${hostIp}/clusters`),
+  getLogFileUrl: (clusterName, componentId, filename, action = 'view') => {
+    return `${base}/api/v1/logs/${encodeURIComponent(clusterName)}/${encodeURIComponent(componentId)}/${encodeURIComponent(filename)}?action=${action}`
+  },
 }
 
 export default api

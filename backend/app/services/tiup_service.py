@@ -1,12 +1,23 @@
 import subprocess
 import re
+import os
 from typing import List, Dict
-from app.models.cluster import ClusterInfo, ClusterDetail, ComponentInfo, HostInfo
+from app.models.cluster import ClusterInfo, ClusterDetail, ComponentInfo, HostInfo, LogFileInfo
+
+# Mapping of component role to its log file names
+ROLE_LOG_FILES = {
+    'tikv': ['tikv.log', 'tikv_stderr.log'],
+    'pd': ['pd.log', 'pd_stderr.log'],
+    'tidb': ['tidb.log', 'tidb_stderr.log'],
+    'grafana': ['grafana.log'],
+    'prometheus': ['prometheus.log'],
+    'alertmanager': ['alertmanager.log'],
+}
 
 
 class TiUPService:
     @staticmethod
-    def execute_command(command: str) -> str:
+    def execute_command(command: str, timeout: int = 30) -> str:
         """Execute tiup command and return output"""
         try:
             result = subprocess.run(
@@ -14,13 +25,18 @@ class TiUPService:
                 shell=True,
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=timeout
             )
             return result.stdout
         except subprocess.TimeoutExpired:
             raise Exception("Command execution timeout")
         except Exception as e:
             raise Exception(f"Command execution failed: {str(e)}")
+
+    @staticmethod
+    def get_log_files_for_role(role: str) -> List[str]:
+        """Get expected log file names for a component role"""
+        return ROLE_LOG_FILES.get(role.lower(), [f'{role.lower()}.log'])
 
     @staticmethod
     def parse_cluster_list(output: str) -> List[ClusterInfo]:
@@ -87,6 +103,9 @@ class TiUPService:
                 
                 parts = re.split(r'\s{2,}', line)
                 if len(parts) >= 8:
+                    role = parts[1]
+                    log_filenames = TiUPService.get_log_files_for_role(role)
+                    log_files = [LogFileInfo(filename=f, exists=True) for f in log_filenames]
                     components.append(ComponentInfo(
                         id=parts[0],
                         role=parts[1],
@@ -95,7 +114,8 @@ class TiUPService:
                         os_arch=parts[4],
                         status=parts[5],
                         data_dir=parts[6],
-                        deploy_dir=parts[7]
+                        deploy_dir=parts[7],
+                        log_files=log_files
                     ))
         
         return ClusterDetail(**cluster_info, components=components)
@@ -155,3 +175,26 @@ class TiUPService:
                 continue
         
         return hosts_map
+
+    def get_log_file_path(self, cluster_name: str, component_id: str, filename: str) -> str:
+        """Get the local file path for a component's log file.
+        
+        The deploy_dir from tiup display gives the base path, e.g.:
+        /data3/cicd-deploy-prop-rw/tikv-18160
+        Log files are under {deploy_dir}/log/{filename}
+        """
+        detail = self.get_cluster_detail(cluster_name)
+        component = None
+        for comp in detail.components:
+            if comp.id == component_id:
+                component = comp
+                break
+        if not component:
+            raise Exception(f"Component {component_id} not found in cluster {cluster_name}")
+
+        allowed_files = self.get_log_files_for_role(component.role)
+        if filename not in allowed_files:
+            raise Exception(f"Log file {filename} not allowed for role {component.role}")
+
+        log_path = os.path.join(component.deploy_dir, "log", filename)
+        return log_path, component

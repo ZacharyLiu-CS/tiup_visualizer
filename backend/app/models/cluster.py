@@ -11,6 +11,11 @@ class ClusterInfo(BaseModel):
     status: str = "unknown"  # healthy, partial, unhealthy, unknown
 
 
+class LogFileInfo(BaseModel):
+    filename: str
+    exists: bool
+
+
 class ComponentInfo(BaseModel):
     id: str
     role: str
@@ -20,6 +25,7 @@ class ComponentInfo(BaseModel):
     status: str
     data_dir: str
     deploy_dir: str
+    log_files: List[LogFileInfo] = []
 
 
 class ClusterDetail(BaseModel):

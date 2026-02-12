@@ -3,7 +3,7 @@
     <div class="modal-content">
       <div class="modal-header">
         <h2>{{ clusterDetail.cluster_name }}</h2>
-        <button class="close-btn" @click="close">×</button>
+        <button class="close-btn" @click="close">&times;</button>
       </div>
       
       <div class="modal-body">
@@ -36,39 +36,62 @@
 
         <div class="components-section">
           <h3>Components ({{ clusterDetail.components.length }})</h3>
-          <div class="table-container">
-            <table class="components-table">
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Role</th>
-                  <th>Host</th>
-                  <th>Ports</th>
-                  <th>Status</th>
-                  <th>Data Dir</th>
-                  <th>Deploy Dir</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="component in clusterDetail.components" :key="component.id">
-                  <td class="id-cell">{{ component.id }}</td>
-                  <td>
-                    <span class="role-badge" :class="`role-${component.role}`">
-                      {{ component.role }}
-                    </span>
-                  </td>
-                  <td class="host-cell">{{ component.host }}</td>
-                  <td>{{ component.ports }}</td>
-                  <td>
-                    <span class="status-badge" :class="getStatusClass(component.status)">
-                      {{ component.status }}
-                    </span>
-                  </td>
-                  <td class="path-cell">{{ component.data_dir }}</td>
-                  <td class="path-cell">{{ component.deploy_dir }}</td>
-                </tr>
-              </tbody>
-            </table>
+          <div class="table-scroll-wrapper">
+            <div class="table-container">
+              <table class="components-table">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Role</th>
+                    <th>Host</th>
+                    <th>Ports</th>
+                    <th>Status</th>
+                    <th>Data Dir</th>
+                    <th>Deploy Dir</th>
+                    <th>Log</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="component in clusterDetail.components" :key="component.id">
+                    <td class="id-cell">{{ component.id }}</td>
+                    <td>
+                      <span class="role-badge" :class="`role-${component.role}`">
+                        {{ component.role }}
+                      </span>
+                    </td>
+                    <td class="host-cell">{{ component.host }}</td>
+                    <td>{{ component.ports }}</td>
+                    <td>
+                      <span class="status-badge" :class="getStatusClass(component.status)">
+                        {{ component.status }}
+                      </span>
+                    </td>
+                    <td class="path-cell">{{ component.data_dir }}</td>
+                    <td class="path-cell">{{ component.deploy_dir }}</td>
+                    <td class="log-cell">
+                      <div class="log-files" v-if="component.log_files && component.log_files.length">
+                        <div class="log-file-row" v-for="logFile in component.log_files" :key="logFile.filename">
+                          <span class="log-filename" :title="logFile.filename">{{ logFile.filename }}</span>
+                          <div class="log-actions">
+                            <button
+                              class="log-btn log-btn-view"
+                              @click="viewLog(component, logFile.filename)"
+                              title="View log in browser"
+                            >View</button>
+                            <button
+                              class="log-btn log-btn-download"
+                              @click="downloadLog(component, logFile.filename)"
+                              title="Download log file"
+                            >Download</button>
+                          </div>
+                        </div>
+                      </div>
+                      <span v-else class="no-logs">-</span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </div>
@@ -77,6 +100,8 @@
 </template>
 
 <script>
+import { clusterAPI } from '../services/api'
+
 export default {
   name: 'ClusterDetailModal',
   props: {
@@ -94,6 +119,29 @@ export default {
       if (status.includes('Up')) return 'status-up'
       if (status.includes('Down')) return 'status-down'
       return 'status-unknown'
+    },
+    viewLog(component, filename) {
+      const url = clusterAPI.getLogFileUrl(
+        this.clusterDetail.cluster_name,
+        component.id,
+        filename,
+        'view'
+      )
+      window.open(url, '_blank')
+    },
+    downloadLog(component, filename) {
+      const url = clusterAPI.getLogFileUrl(
+        this.clusterDetail.cluster_name,
+        component.id,
+        filename,
+        'download'
+      )
+      const link = document.createElement('a')
+      link.href = url
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
     }
   }
 }
@@ -208,16 +256,41 @@ export default {
   color: #1f2937;
 }
 
-.table-container {
+.table-scroll-wrapper {
   overflow-x: auto;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
+  max-width: 100%;
+}
+
+/* Custom scrollbar styling */
+.table-scroll-wrapper::-webkit-scrollbar {
+  height: 10px;
+}
+
+.table-scroll-wrapper::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 0 0 8px 8px;
+}
+
+.table-scroll-wrapper::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 5px;
+}
+
+.table-scroll-wrapper::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+.table-container {
+  min-width: fit-content;
 }
 
 .components-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
+  min-width: 1200px;
 }
 
 .components-table thead {
@@ -231,6 +304,9 @@ export default {
   color: #6b7280;
   border-bottom: 2px solid #e5e7eb;
   white-space: nowrap;
+  position: sticky;
+  top: 0;
+  background: #f9fafb;
 }
 
 .components-table td {
@@ -246,12 +322,14 @@ export default {
   font-family: monospace;
   font-size: 12px;
   color: #6b7280;
+  white-space: nowrap;
 }
 
 .host-cell {
   font-family: monospace;
   font-weight: 500;
   color: #1f2937;
+  white-space: nowrap;
 }
 
 .path-cell {
@@ -262,6 +340,74 @@ export default {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.log-cell {
+  min-width: 200px;
+  white-space: nowrap;
+}
+
+.log-files {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.log-file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.log-filename {
+  font-family: monospace;
+  font-size: 11px;
+  color: #6b7280;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.log-btn {
+  padding: 2px 8px;
+  border: none;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.log-btn-view {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.log-btn-view:hover {
+  background: #bfdbfe;
+  color: #1e3a8a;
+}
+
+.log-btn-download {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.log-btn-download:hover {
+  background: #a7f3d0;
+  color: #064e3b;
+}
+
+.no-logs {
+  color: #d1d5db;
 }
 
 .role-badge {
