@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from app.core.config import settings
 from app.api.routes import router
+from app.api.terminal import router as terminal_router
 import os
 
 app = FastAPI(
@@ -27,6 +28,9 @@ app.add_middleware(
 
 # Include API routes
 app.include_router(router, prefix=settings.api_prefix)
+
+# Include WebSocket terminal route
+app.include_router(terminal_router)
 
 
 @app.get("/health")

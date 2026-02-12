@@ -2,10 +2,18 @@
   <div class="home-view">
     <header class="app-header">
       <h1>TiUP Cluster Visualizer</h1>
-      <button v-if="selectedHost || selectedCluster" @click="clearSelection" class="clear-btn">
-        Clear Selection
-      </button>
+      <div class="header-actions">
+        <button @click="showTerminal = true" class="terminal-btn" title="Open Terminal">
+          &#9002; Terminal
+        </button>
+        <button v-if="selectedHost || selectedCluster" @click="clearSelection" class="clear-btn">
+          Clear Selection
+        </button>
+      </div>
     </header>
+
+    <!-- Web Terminal -->
+    <WebTerminal :visible="showTerminal" @close="showTerminal = false" />
 
     <div class="loading-overlay" v-if="loading">
       <div class="spinner"></div>
@@ -74,6 +82,7 @@ import HostCard from '../components/HostCard.vue'
 import ClusterCard from '../components/ClusterCard.vue'
 import ClusterDetailModal from '../components/ClusterDetailModal.vue'
 import ConnectionLines from '../components/ConnectionLines.vue'
+import WebTerminal from '../components/WebTerminal.vue'
 
 export default {
   name: 'HomeView',
@@ -81,13 +90,15 @@ export default {
     HostCard,
     ClusterCard,
     ClusterDetailModal,
-    ConnectionLines
+    ConnectionLines,
+    WebTerminal
   },
   data() {
     return {
       hostRefs: {},
       clusterRefs: {},
-      connectionLines: []
+      connectionLines: [],
+      showTerminal: false
     }
   },
   computed: {
@@ -269,6 +280,34 @@ export default {
   margin: 0;
   font-size: 28px;
   font-weight: 700;
+}
+
+.header-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.terminal-btn {
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  color: white;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 14px;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.terminal-btn:hover {
+  background: rgba(255, 255, 255, 0.25);
+  border-color: white;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
 
 .clear-btn {
