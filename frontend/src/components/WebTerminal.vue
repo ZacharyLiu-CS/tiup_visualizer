@@ -137,7 +137,8 @@ export default {
       if (this._destroyed) return
 
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const wsUrl = `${protocol}//${window.location.host}/ws/terminal`
+      const basePath = import.meta.env.BASE_URL.replace(/\/+$/, '')
+      const wsUrl = `${protocol}//${window.location.host}${basePath}/ws/terminal`
 
       this.ws = new WebSocket(wsUrl)
       this.ws.binaryType = 'arraybuffer'
