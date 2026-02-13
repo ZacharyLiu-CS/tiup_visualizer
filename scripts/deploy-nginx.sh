@@ -103,6 +103,13 @@ if ! id "$RUN_USER" &>/dev/null; then
     exit 1
 fi
 
+# ---- Stop existing service if running (to avoid "Text file busy") ----
+if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+    echo -e "${YELLOW}Stopping running service ${SERVICE_NAME}...${NC}"
+    sudo systemctl stop "$SERVICE_NAME"
+    sleep 1
+fi
+
 # ---- Deploy files ----
 echo -e "${YELLOW}Deploying files to ${DEPLOY_DIR}...${NC}"
 
@@ -110,7 +117,8 @@ sudo mkdir -p "$DEPLOY_DIR"
 sudo mkdir -p "$DEPLOY_DIR/logs"
 sudo chown "$RUN_USER":"$(id -gn "$RUN_USER")" "$DEPLOY_DIR/logs"
 
-# Copy binary
+# Copy binary (remove first to avoid "Text file busy" if still held)
+sudo rm -f "$DEPLOY_DIR/tiup-visualizer"
 sudo cp "$BUILD_DIR/tiup-visualizer" "$DEPLOY_DIR/tiup-visualizer"
 sudo chmod +x "$DEPLOY_DIR/tiup-visualizer"
 

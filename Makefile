@@ -20,8 +20,8 @@ ensure-static:
 
 # Build frontend and copy to backend static directory for embedding
 frontend: ensure-static
-	@echo "==> Building frontend..."
-	cd $(FRONTEND_DIR) && npm ci && npm run build
+	@echo "==> Building frontend (BASE_PATH=$(BASE_PATH))..."
+	cd $(FRONTEND_DIR) && npm ci && BASE_PATH=$(BASE_PATH)/ npm run build
 	@rm -rf $(STATIC_DIR)/*
 	@cp -r $(FRONTEND_DIR)/dist/* $(STATIC_DIR)/
 	@echo "==> Frontend built and copied to $(STATIC_DIR)/"
