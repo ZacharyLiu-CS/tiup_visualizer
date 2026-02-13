@@ -15,9 +15,9 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-# Check conda
-if ! command -v conda &> /dev/null; then
-    echo -e "${RED}Error: conda is not installed${NC}"
+# Check Go
+if ! command -v go &> /dev/null; then
+    echo -e "${RED}Error: Go is not installed${NC}"
     exit 1
 fi
 
@@ -32,35 +32,6 @@ if ! command -v tiup &> /dev/null; then
     echo -e "${YELLOW}Warning: TiUP is not installed or not in PATH${NC}"
     echo "The application will start but may not work correctly without TiUP"
 fi
-
-echo -e "${YELLOW}Setting up backend...${NC}"
-cd "$PROJECT_ROOT/backend"
-
-# Setup Python virtual environment with conda
-if ! conda env list | grep -q "^env_tiup_visualizer "; then
-    echo "Creating conda virtual environment..."
-    conda create --name env_tiup_visualizer python=3.8 -y
-fi
-
-eval "$(conda shell.bash hook)"
-conda activate env_tiup_visualizer
-
-# Install Python dependencies
-if [ ! -f "$CONDA_PREFIX/.installed" ]; then
-    echo "Installing Python dependencies..."
-    pip install -q --upgrade pip
-    pip install -q -r requirements.txt
-    touch "$CONDA_PREFIX/.installed"
-else
-    echo "Python dependencies already installed"
-fi
-
-# Copy env file
-if [ ! -f ".env" ]; then
-    cp .env.example .env
-fi
-
-echo -e "${GREEN}Backend setup complete!${NC}"
 
 echo -e "${YELLOW}Setting up frontend...${NC}"
 cd "$PROJECT_ROOT/frontend"
@@ -78,13 +49,12 @@ echo -e "${GREEN}Frontend setup complete!${NC}"
 # Kill existing services if running
 echo -e "${YELLOW}Checking for existing services...${NC}"
 
-# Kill existing backend (uvicorn on port 8000)
+# Kill existing backend on port 8000
 EXISTING_BACKEND=$(lsof -ti tcp:8000 2>/dev/null || true)
 if [ -n "$EXISTING_BACKEND" ]; then
     echo -e "${YELLOW}Stopping existing backend (PID: $EXISTING_BACKEND)...${NC}"
     kill $EXISTING_BACKEND 2>/dev/null || true
     sleep 1
-    # Force kill if still alive
     kill -9 $EXISTING_BACKEND 2>/dev/null || true
 fi
 
@@ -120,12 +90,10 @@ echo "======================================"
 echo -e "${GREEN}Starting TiUP Visualizer...${NC}"
 echo "======================================"
 
-# Start backend
+# Start backend (Go)
 echo -e "${YELLOW}Starting backend on http://localhost:8000${NC}"
-cd "$PROJECT_ROOT/backend"
-eval "$(conda shell.bash hook)"
-conda activate env_tiup_visualizer
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > /tmp/tiup-visualizer-backend.log 2>&1 &
+cd "$PROJECT_ROOT/backend-go"
+go run . > /tmp/tiup-visualizer-backend.log 2>&1 &
 BACKEND_PID=$!
 
 # Wait for backend to start
@@ -159,7 +127,6 @@ echo "======================================"
 echo ""
 echo -e "Frontend: ${GREEN}http://localhost:5173${NC}"
 echo -e "Backend API: ${GREEN}http://localhost:8000${NC}"
-echo -e "API Docs: ${GREEN}http://localhost:8000/docs${NC}"
 echo ""
 echo "Backend logs: /tmp/tiup-visualizer-backend.log"
 echo "Frontend logs: /tmp/tiup-visualizer-frontend.log"

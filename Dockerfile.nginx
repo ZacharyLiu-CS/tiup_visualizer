@@ -1,20 +1,10 @@
 # ============================================
-# Dockerfile.nginx - Nginx + Uvicorn deployment
+# Dockerfile.nginx - Nginx + Go binary deployment
 # Supports sub-path deployment via BASE_PATH build arg
 # ============================================
 
-# Stage 1: Build backend dependencies
-FROM python:3.11-slim as backend-builder
-
-WORKDIR /app
-
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY backend/app ./app
-
-# Stage 2: Build frontend with configurable base path
-FROM node:20-alpine as frontend-builder
+# Stage 1: Build frontend with configurable base path
+FROM node:20-alpine AS frontend-builder
 
 ARG BASE_PATH=/tiup-visualizer
 
@@ -26,33 +16,42 @@ RUN npm ci
 COPY frontend/ ./
 RUN BASE_PATH="${BASE_PATH}/" npm run build
 
-# Stage 3: Final image with Nginx + Python
-FROM python:3.11-slim
-
-ARG BASE_PATH=/tiup-visualizer
-
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends nginx supervisor && \
-    rm -rf /var/lib/apt/lists/*
+# Stage 2: Build Go backend with embedded frontend
+FROM golang:1.22-alpine AS backend-builder
 
 WORKDIR /app
 
-# Copy Python dependencies
-COPY --from=backend-builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-COPY --from=backend-builder /usr/local/bin /usr/local/bin
+COPY backend-go/go.mod backend-go/go.sum ./
+RUN go mod download
 
-# Copy application
-COPY --from=backend-builder /app/app ./app
+COPY backend-go/ ./
+
+# Copy frontend build into static/ for embedding
+COPY --from=frontend-builder /app/dist ./static/
+
+# Build static binary
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o tiup-visualizer .
+
+# Stage 3: Final image with Nginx + Go binary
+FROM alpine:3.19
+
+ARG BASE_PATH=/tiup-visualizer
+
+RUN apk add --no-cache nginx supervisor bash openssh-client
+
+WORKDIR /app
+
+# Copy Go binary
+COPY --from=backend-builder /app/tiup-visualizer .
 
 # Copy frontend build to nginx serving directory
 COPY --from=frontend-builder /app/dist /var/www/tiup-visualizer/static
 
-# Copy env file and set ROOT_PATH
-COPY backend/.env.example ./.env
-RUN sed -i "s|^ROOT_PATH=.*|ROOT_PATH=\"${BASE_PATH}\"|" ./.env
-
 # Copy config file
-COPY backend/config.yaml.example ./config.yaml
+COPY backend-go/config.yaml.example ./config.yaml
+
+# Set ROOT_PATH environment variable
+ENV ROOT_PATH=${BASE_PATH}
 
 # Generate nginx config from template
 COPY nginx.conf.template /tmp/nginx.conf.template
@@ -60,11 +59,10 @@ RUN sed \
     -e "s|__PATH_PREFIX__|${BASE_PATH}|g" \
     -e "s|__BACKEND_PORT__|8000|g" \
     -e "s|__STATIC_DIR__|/var/www/tiup-visualizer/static|g" \
-    /tmp/nginx.conf.template > /etc/nginx/sites-available/tiup-visualizer && \
-    rm -f /etc/nginx/sites-enabled/default && \
-    ln -s /etc/nginx/sites-available/tiup-visualizer /etc/nginx/sites-enabled/
+    /tmp/nginx.conf.template > /etc/nginx/http.d/tiup-visualizer.conf && \
+    rm -f /etc/nginx/http.d/default.conf
 
-# Supervisor config to manage both nginx and uvicorn
+# Supervisor config to manage both nginx and the Go binary
 COPY supervisord.conf /etc/supervisor/conf.d/tiup-visualizer.conf
 
 EXPOSE 80

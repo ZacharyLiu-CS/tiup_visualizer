@@ -1,13 +1,10 @@
-FROM python:3.11-slim as backend-builder
+# ============================================
+# Dockerfile - Single static binary deployment
+# Produces a minimal image with just the Go binary
+# ============================================
 
-WORKDIR /app
-
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY backend/app ./app
-
-FROM node:20-alpine as frontend-builder
+# Stage 1: Build frontend
+FROM node:20-alpine AS frontend-builder
 
 WORKDIR /app
 
@@ -17,24 +14,32 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-FROM python:3.11-slim
+# Stage 2: Build Go backend with embedded frontend
+FROM golang:1.22-alpine AS backend-builder
 
 WORKDIR /app
 
-# Copy Python dependencies
-COPY --from=backend-builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-COPY --from=backend-builder /usr/local/bin /usr/local/bin
+COPY backend-go/go.mod backend-go/go.sum ./
+RUN go mod download
 
-# Copy application
-COPY --from=backend-builder /app/app ./app
-COPY --from=frontend-builder /app/dist ./static
+COPY backend-go/ ./
 
-# Copy env file
-COPY backend/.env.example ./.env
+# Copy frontend build into static/ for embedding
+COPY --from=frontend-builder /app/dist ./static/
 
-# Copy config file
-COPY backend/config.yaml.example ./config.yaml
+# Build static binary
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o tiup-visualizer .
+
+# Stage 3: Minimal runtime image
+FROM alpine:3.19
+
+RUN apk add --no-cache bash openssh-client
+
+WORKDIR /app
+
+COPY --from=backend-builder /app/tiup-visualizer .
+COPY backend-go/config.yaml.example ./config.yaml
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["./tiup-visualizer"]

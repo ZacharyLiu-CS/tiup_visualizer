@@ -11,7 +11,7 @@ set -e
 #
 # Options:
 #   --prefix PATH    URL path prefix (default: /tiup-visualizer)
-#   --port PORT      Backend uvicorn port (default: 8000)
+#   --port PORT      Backend port (default: 8000)
 #   --user USER      System user to run the service (default: current user)
 #   --help           Show this help
 #
@@ -93,13 +93,8 @@ if ! command -v nginx &> /dev/null; then
     exit 1
 fi
 
-if ! command -v conda &> /dev/null; then
-    echo -e "${RED}Error: conda is not installed${NC}"
-    exit 1
-fi
-
-if [ ! -f "$BUILD_DIR/requirements.txt" ]; then
-    echo -e "${RED}Error: requirements.txt not found. Run this script from the build directory.${NC}"
+if [ ! -f "$BUILD_DIR/tiup-visualizer" ]; then
+    echo -e "${RED}Error: tiup-visualizer binary not found. Run this script from the build directory.${NC}"
     exit 1
 fi
 
@@ -108,19 +103,6 @@ if ! id "$RUN_USER" &>/dev/null; then
     exit 1
 fi
 
-# ---- Setup conda environment ----
-echo -e "${YELLOW}Setting up Python environment...${NC}"
-if ! conda env list | grep -q "^env_tiup_visualizer "; then
-    conda create --name env_tiup_visualizer python=3.8 -y
-fi
-
-eval "$(conda shell.bash hook)"
-conda activate env_tiup_visualizer
-pip install -q --upgrade pip
-pip install -q -r "$BUILD_DIR/requirements.txt"
-
-echo -e "${GREEN}Python environment ready!${NC}"
-
 # ---- Deploy files ----
 echo -e "${YELLOW}Deploying files to ${DEPLOY_DIR}...${NC}"
 
@@ -128,13 +110,9 @@ sudo mkdir -p "$DEPLOY_DIR"
 sudo mkdir -p "$DEPLOY_DIR/logs"
 sudo chown "$RUN_USER":"$(id -gn "$RUN_USER")" "$DEPLOY_DIR/logs"
 
-# Copy backend app
-sudo cp -r "$BUILD_DIR/app" "$DEPLOY_DIR/"
-sudo cp "$BUILD_DIR/requirements.txt" "$DEPLOY_DIR/"
-
-if [ ! -f "$DEPLOY_DIR/.env" ]; then
-    sudo cp "$BUILD_DIR/.env" "$DEPLOY_DIR/.env"
-fi
+# Copy binary
+sudo cp "$BUILD_DIR/tiup-visualizer" "$DEPLOY_DIR/tiup-visualizer"
+sudo chmod +x "$DEPLOY_DIR/tiup-visualizer"
 
 # Copy config.yaml (only if not already deployed, to preserve user edits)
 if [ ! -f "$DEPLOY_DIR/config.yaml" ]; then
@@ -143,22 +121,13 @@ if [ ! -f "$DEPLOY_DIR/config.yaml" ]; then
     fi
 fi
 
-# Set ROOT_PATH in .env for FastAPI to know its prefix
-sudo sed -i "s|^ROOT_PATH=.*|ROOT_PATH=\"${PATH_PREFIX}\"|" "$DEPLOY_DIR/.env"
-
-# Copy frontend static files
+# Copy frontend static files (for nginx to serve directly)
 sudo rm -rf "$DEPLOY_DIR/static"
 sudo cp -r "$BUILD_DIR/static" "$DEPLOY_DIR/static"
 
 echo -e "${GREEN}Files deployed!${NC}"
 
 # ---- Generate Nginx config from template ----
-# Strategy: inject location blocks into the existing server{} block instead of
-# creating a separate server{} block that would conflict with /etc/nginx/nginx.conf.
-#
-# - upstream config  → /etc/nginx/conf.d/  (http-level, always loaded)
-# - location blocks  → /etc/nginx/default.d/ (inside existing server{} via include)
-#                    OR injected into the main server block for Debian/Ubuntu layouts
 echo -e "${YELLOW}Configuring Nginx...${NC}"
 
 if [ ! -f "$BUILD_DIR/nginx.conf.template" ]; then
@@ -185,9 +154,8 @@ sed \
 
 # Install upstream to conf.d (works on both Debian and RHEL)
 if [ -d /etc/nginx/conf.d ]; then
-    # Clean up old server-block style config if it exists (from previous deployment)
     if [ -f /etc/nginx/conf.d/"$NGINX_SITE_NAME".conf ]; then
-        echo -e "${YELLOW}Removing old conf.d/${NGINX_SITE_NAME}.conf (contained server block)...${NC}"
+        echo -e "${YELLOW}Removing old conf.d/${NGINX_SITE_NAME}.conf...${NC}"
         sudo rm -f /etc/nginx/conf.d/"$NGINX_SITE_NAME".conf
     fi
     sudo cp /tmp/"$NGINX_SITE_NAME"-upstream.conf /etc/nginx/conf.d/"$NGINX_SITE_NAME"-upstream.conf
@@ -199,43 +167,35 @@ fi
 
 # Install location blocks into the default server{} block
 if [ -d /etc/nginx/default.d ]; then
-    # RHEL/CentOS: /etc/nginx/nginx.conf has `include /etc/nginx/default.d/*.conf;` inside server{}
     sudo cp /tmp/"$NGINX_SITE_NAME"-locations.conf /etc/nginx/default.d/"$NGINX_SITE_NAME".conf
     echo -e "${GREEN}Location config installed to default.d/${NGINX_SITE_NAME}.conf${NC}"
 
-    # Also clean up old sites-available style config if it exists
     if [ -f /etc/nginx/sites-enabled/"$NGINX_SITE_NAME" ]; then
         sudo rm -f /etc/nginx/sites-enabled/"$NGINX_SITE_NAME"
         sudo rm -f /etc/nginx/sites-available/"$NGINX_SITE_NAME"
     fi
 elif [ -d /etc/nginx/sites-available ]; then
-    # Debian/Ubuntu: no default.d, so we create a snippet and include it
-    # We put it in /etc/nginx/snippets/ and add an include to the main site config
     sudo mkdir -p /etc/nginx/snippets
     sudo cp /tmp/"$NGINX_SITE_NAME"-locations.conf /etc/nginx/snippets/"$NGINX_SITE_NAME".conf
     echo -e "${GREEN}Location config installed to snippets/${NGINX_SITE_NAME}.conf${NC}"
 
-    # Check if default site already includes our snippet
     DEFAULT_SITE="/etc/nginx/sites-available/default"
     INCLUDE_LINE="include /etc/nginx/snippets/${NGINX_SITE_NAME}.conf;"
     if [ -f "$DEFAULT_SITE" ] && ! grep -qF "$INCLUDE_LINE" "$DEFAULT_SITE"; then
         echo -e "${YELLOW}Adding include directive to ${DEFAULT_SITE}...${NC}"
-        # Insert include before the last closing brace of the first server block
         sudo sed -i "/^[[:space:]]*server[[:space:]]*{/,/^[[:space:]]*}/ {
             /^[[:space:]]*}/ i\\    ${INCLUDE_LINE}
         }" "$DEFAULT_SITE"
         echo -e "${GREEN}Include directive added to default site config${NC}"
     fi
 
-    # Clean up old server-block style config
     if [ -f /etc/nginx/sites-enabled/"$NGINX_SITE_NAME" ]; then
         sudo rm -f /etc/nginx/sites-enabled/"$NGINX_SITE_NAME"
         sudo rm -f /etc/nginx/sites-available/"$NGINX_SITE_NAME"
-        echo -e "${YELLOW}Removed old sites-available/${NGINX_SITE_NAME} (contained server block)${NC}"
+        echo -e "${YELLOW}Removed old sites-available/${NGINX_SITE_NAME}${NC}"
     fi
 else
     echo -e "${RED}Error: Cannot find /etc/nginx/default.d or /etc/nginx/sites-available${NC}"
-    echo -e "${RED}Unable to inject location blocks into existing server configuration${NC}"
     exit 1
 fi
 
@@ -255,14 +215,12 @@ sudo systemctl reload nginx
 # ---- Create systemd service for backend ----
 echo -e "${YELLOW}Creating systemd service: ${SERVICE_NAME}...${NC}"
 
-CONDA_PREFIX_PATH=$(conda info --base)
 RUN_USER_HOME=$(eval echo "~$RUN_USER")
 TIUP_BIN_DIR="$RUN_USER_HOME/.tiup/bin"
 
 if [ ! -f "$TIUP_BIN_DIR/tiup" ]; then
     echo -e "${YELLOW}Warning: tiup not found at ${TIUP_BIN_DIR}/tiup${NC}"
     echo -e "${YELLOW}The service user '${RUN_USER}' may not have tiup installed.${NC}"
-    echo -e "${YELLOW}Install tiup for this user: sudo -u ${RUN_USER} bash -c 'curl --proto =https --tlsv1.2 -sSf https://tiup-mirrors.pingcap.com/install.sh | sh'${NC}"
 fi
 
 cat > /tmp/"$SERVICE_NAME".service << EOF
@@ -274,11 +232,13 @@ After=network.target
 Type=simple
 User=$RUN_USER
 WorkingDirectory=$DEPLOY_DIR
-ExecStart=/bin/bash -c 'eval "\$(${CONDA_PREFIX_PATH}/bin/conda shell.bash hook)" && conda activate env_tiup_visualizer && python -m uvicorn app.main:app --host 127.0.0.1 --port ${BACKEND_PORT} --workers 2'
+ExecStart=$DEPLOY_DIR/tiup-visualizer
 Restart=on-failure
 RestartSec=10
-Environment="PATH=${TIUP_BIN_DIR}:${CONDA_PREFIX_PATH}/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PATH=${TIUP_BIN_DIR}:/usr/local/bin:/usr/bin:/bin"
 Environment="HOME=${RUN_USER_HOME}"
+Environment="LISTEN_ADDR=127.0.0.1:${BACKEND_PORT}"
+Environment="ROOT_PATH=${PATH_PREFIX}"
 
 [Install]
 WantedBy=multi-user.target
@@ -292,7 +252,7 @@ sudo systemctl restart "$SERVICE_NAME"
 # ---- Verify ----
 echo ""
 echo -e "${YELLOW}Waiting for backend to start...${NC}"
-sleep 3
+sleep 2
 
 if curl -s "http://127.0.0.1:${BACKEND_PORT}/health" > /dev/null 2>&1; then
     echo -e "${GREEN}Backend is running!${NC}"
@@ -307,7 +267,6 @@ echo "======================================"
 echo ""
 echo -e "Web Interface: ${GREEN}http://localhost${PATH_PREFIX}/${NC}"
 echo -e "API Endpoint:  ${GREEN}http://localhost${PATH_PREFIX}/api/v1${NC}"
-echo -e "API Docs:      ${GREEN}http://localhost${PATH_PREFIX}/docs${NC}"
 echo -e "Health Check:  ${GREEN}http://localhost${PATH_PREFIX}/health${NC}"
 echo ""
 echo "Manage services:"
