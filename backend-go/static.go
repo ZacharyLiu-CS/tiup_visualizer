@@ -8,13 +8,13 @@ import (
 	"strings"
 )
 
-//go:embed static/*
+//go:embed all:static
 var staticFS embed.FS
 
 func (s *Server) registerStaticRoutes() {
-	// Check if embedded static files exist
-	entries, err := staticFS.ReadDir("static")
-	if err != nil || len(entries) == 0 {
+	// Check if embedded static files exist (ignore .gitkeep placeholder)
+	_, err := staticFS.ReadFile("static/index.html")
+	if err != nil {
 		slog.Info("No embedded static files found, SPA serving disabled")
 		s.mux.HandleFunc("GET /{path...}", func(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]string{

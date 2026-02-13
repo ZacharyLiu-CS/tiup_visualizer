@@ -1,11 +1,10 @@
 # TiUP Visualizer
 
-A web-based visualization tool for TiUP cluster management, built with FastAPI and Vue 3.
+A web-based visualization tool for TiUP cluster management, built with Go and Vue 3.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Python](https://img.shields.io/badge/python-3.8+-blue.svg)
+![Go](https://img.shields.io/badge/Go-1.22+-00ADD8.svg)
 ![Node](https://img.shields.io/badge/node-18+-green.svg)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.109-009688.svg)
 ![Vue](https://img.shields.io/badge/Vue-3.4-42b883.svg)
 
 ## 📖 Overview
@@ -24,99 +23,77 @@ TiUP Visualizer provides an intuitive web interface to visualize and manage your
 
 See [QUICKSTART.md](QUICKSTART.md) for detailed instructions.
 
-### One-Click Start (Development)
+### Development
 
 ```bash
 cd tiup-visualizer
-./scripts/start-dev.sh
+make dev
 ```
 
-Access at: **http://localhost:5173**
+这会同时启动 Go 后端 (`:8000`) 和 Vite 前端开发服务器 (`:5173`)，支持前端热更新。
+
+- 前端页面: http://localhost:5173
+- 后端 API: http://localhost:8000
+
+也可以分别启动：
+```bash
+make dev-backend    # 仅启动后端
+make dev-frontend   # 仅启动前端（需要后端已运行）
+```
 
 ## Project Structure
 
 ```
 tiup-visualizer/
-├── backend/                 # FastAPI backend
-│   ├── app/
-│   │   ├── api/            # API routes
-│   │   ├── core/           # Core configuration
-│   │   ├── models/         # Pydantic models
-│   │   └── services/       # Business logic
-│   └── requirements.txt
-├── frontend/               # Vue 3 frontend
+├── Makefile                 # Build, dev, deploy commands
+├── backend-go/              # Go backend (single binary with embedded frontend)
+│   ├── main.go
+│   ├── routes.go
+│   ├── tiup_service.go
+│   ├── auth.go
+│   ├── config.go
+│   ├── static.go            # Embedded frontend via go:embed
+│   └── static/              # Frontend build output (gitignored)
+├── frontend/                # Vue 3 frontend
 │   ├── src/
-│   │   ├── components/    # Vue components
-│   │   ├── views/         # Page views
-│   │   ├── stores/        # Pinia stores
-│   │   └── services/      # API services
+│   │   ├── components/      # Vue components
+│   │   ├── views/           # Page views
+│   │   ├── stores/          # Pinia stores
+│   │   └── services/        # API services
 │   └── package.json
-└── scripts/               # Build and deployment scripts
+└── scripts/                 # Deployment and utility scripts
 ```
 
 ## Requirements
 
-- Python 3.8+
+- Go 1.22+
 - Node.js 18+
 - TiUP installed and available in PATH
 
 ## Quick Start
 
-### 🚀 One-Click Start (Recommended)
+### Development
 
 ```bash
-cd tiup-visualizer
-./scripts/start-dev.sh
+make dev
 ```
-
-That's it! The script will:
-- ✅ Check requirements (Python 3, Node.js, TiUP)
-- ✅ Setup virtual environment automatically
-- ✅ Install all dependencies
-- ✅ Start both backend and frontend
-- ✅ Open at http://localhost:5173
-
-Press `Ctrl+C` to stop all services.
-
-### Development Mode (Manual)
-
-If you want to run backend and frontend separately:
-
-**Terminal 1 - Backend:**
-```bash
-cd backend
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-python -m uvicorn app.main:app --reload
-```
-
-**Terminal 2 - Frontend:**
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Access:
-- Frontend: http://localhost:5173
-- Backend API: http://localhost:8000
-- API Docs: http://localhost:8000/docs
 
 ### Production Build
 
-1. Build the project:
 ```bash
-cd scripts
-./build.sh
+make build
 ```
 
-2. Deploy the `build` directory to your server
+This will:
+- Build the Vue 3 frontend
+- Embed it into the Go binary
+- Create a deployment package in `build/`
 
-3. Start the service:
+Deploy the `build/` directory to your server and run:
+
 ```bash
 cd build
-./start.sh
+./tiup-visualizer
 ```
 
 ### Nginx 反向代理部署（推荐用于多站点）
@@ -125,13 +102,9 @@ cd build
 
 #### 方式一：使用部署脚本
 
-1. 构建项目（可自定义路径前缀）：
+1. 构建项目：
 ```bash
-# 默认前缀 /tiup-visualizer
-cd scripts && ./build.sh
-
-# 自定义前缀
-BASE_PATH=/my-app ./build.sh
+make build
 ```
 
 2. 进入 build 目录，运行部署脚本：
@@ -218,59 +191,39 @@ docker run -p 8000:8000 -v /root/.tiup:/root/.tiup:ro tiup-visualizer
 
 ## Scripts
 
-`scripts/` 目录下提供了开发、构建和部署相关的脚本工具。
+`scripts/` 目录下提供了部署和测试相关的脚本工具。项目的构建和开发使用根目录的 `Makefile` 管理。
 
-### `scripts/dev.sh` — 开发环境初始化
-
-一键配置开发环境，创建 conda 虚拟环境、安装后端和前端依赖、复制 `.env` 配置文件。
+### Makefile 命令
 
 ```bash
-# 初始化开发环境
-cd scripts && ./dev.sh
+# 开发模式：同时启动后端 (:8000) + 前端 (:5173)，支持热更新
+make dev
 
-# 初始化完成后，按提示分别启动前后端：
-# Terminal 1 - Backend:
-cd backend && eval "$(conda shell.bash hook)" && conda activate env_tiup_visualizer && python -m uvicorn app.main:app --reload
+# 仅启动后端
+make dev-backend
 
-# Terminal 2 - Frontend:
-cd frontend && npm run dev
-```
+# 仅启动前端（需后端已运行）
+make dev-frontend
 
-### `scripts/start-dev.sh` — 同时启动前后端
+# 完整构建：前端 + 后端 + 部署包
+make build
 
-在同一个终端中同时启动后端（uvicorn）和前端（vite dev server），适合快速开发调试。需要先运行 `dev.sh` 完成环境初始化。
+# 仅构建前端
+make frontend
 
-```bash
-# 从项目根目录运行
-cd scripts && ./start-dev.sh
+# 仅构建后端（假设 static/ 已存在）
+make backend-only
 
-# Ctrl+C 停止所有服务
-```
+# 上传构建包
+make upload
 
-### `scripts/build.sh` — 生产构建打包
-
-构建前后端并生成部署包到 `build/` 目录。支持通过 `BASE_PATH` 环境变量自定义 URL 路径前缀。
-
-```bash
-# 使用默认路径前缀 /tiup-visualizer
-cd scripts && ./build.sh
-
-# 自定义路径前缀
-BASE_PATH=/my-app ./build.sh
-
-# 构建完成后，build/ 目录包含：
-#   app/                  - 后端代码
-#   static/               - 前端静态文件
-#   config.yaml           - 认证和日志配置（可编辑用户名密码）
-#   start.sh              - 独立启动脚本
-#   deploy-nginx.sh       - Nginx 部署脚本
-#   nginx.conf.template   - Nginx 配置模板
-#   tiup-visualizer.service - systemd 服务文件
+# 清理构建产物
+make clean
 ```
 
 ### `scripts/deploy-nginx.sh` — Nginx 反向代理部署
 
-在服务器上配置 Nginx 反向代理 + systemd 服务，支持自定义路径前缀和端口，适合多站点共存部署。需要先运行 `build.sh` 生成部署包。
+在服务器上配置 Nginx 反向代理 + systemd 服务，支持自定义路径前缀和端口，适合多站点共存部署。需要先运行 `make build` 生成部署包。
 
 ```bash
 cd build
@@ -299,14 +252,12 @@ cd build
 
 ### `scripts/upload.sh` — 构建包上传
 
-将 `build/` 目录打包为 `.tar.gz` 并上传到制品仓库。需要先运行 `build.sh` 完成构建。
+将 `build/` 目录打包为 `.tar.gz` 并上传到制品仓库。需要先运行 `make build` 完成构建。
 
 ```bash
 # 先构建，再上传
-cd scripts && ./build.sh
-./upload.sh
-
-# 上传完成后会提示是否删除本地压缩包
+make build
+./scripts/upload.sh
 ```
 
 ## API Endpoints
@@ -335,7 +286,7 @@ cd scripts && ./build.sh
 
 ### 用户名和密码
 
-认证配置在 `backend/config.yaml` 中（两种部署模式共用同一配置格式）：
+认证配置在 `backend-go/config.yaml` 中：
 
 ```yaml
 auth:
@@ -345,15 +296,15 @@ auth:
   token_expire_hours: 24     # Token 过期时间（小时）
 ```
 
-**开发模式 (`scripts/start-dev.sh`)**：直接编辑 `backend/config.yaml`，重启服务即可生效。
+**开发模式 (`make dev`)**：直接编辑 `backend-go/config.yaml`，重启服务即可生效。
 
-**生产构建 (`build/` 目录)**：`scripts/build.sh` 会将 `backend/config.yaml.example` 复制为 `build/config.yaml`。部署前直接编辑它：
+**生产构建 (`build/` 目录)**：`make build` 会将 `backend-go/config.yaml.example` 复制为 `build/config.yaml`。部署前直接编辑它：
 ```bash
 vim build/config.yaml    # 修改用户名、密码、secret_key
 ```
 
 **Nginx 部署模式 (`deploy-nginx.sh`)**：
-- 部署前：先修改 `build/config.yaml`（或修改源文件 `backend/config.yaml.example` 后重新 build）
+- 部署前：先修改 `build/config.yaml`（或修改源文件 `backend-go/config.yaml.example` 后重新 `make build`）
 - 部署后：直接修改部署目录的配置文件并重启服务：
   ```bash
   sudo vim /var/www/tiup-visualizer/config.yaml
@@ -368,12 +319,12 @@ volumes:
 
 配置文件查找顺序：
 1. 环境变量 `TIUP_VISUALIZER_CONFIG` 指定的路径
-2. `backend/config.yaml`（开发模式默认）
+2. `backend-go/config.yaml`（开发模式默认）
 3. `/etc/tiup-visualizer/config.yaml`
 
 ### 其他配置
 
-`backend/.env` 中的应用配置：
+`backend-go/config.yaml` 中的应用配置：
 ```
 APP_NAME="TiUP Visualizer"
 DEBUG=True
@@ -383,9 +334,9 @@ API_PREFIX="/api/v1"
 ## Technologies Used
 
 ### Backend
-- **FastAPI**: High-performance Python web framework
-- **Pydantic**: Data validation using Python type annotations
-- **Uvicorn**: ASGI server for running FastAPI
+- **Go 1.22+**: Single static binary with embedded frontend
+- **net/http**: Standard library HTTP server
+- **embed**: Frontend assets embedded at compile time
 
 ### Frontend
 - **Vue 3**: Progressive JavaScript framework

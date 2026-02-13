@@ -12,51 +12,20 @@ export PATH="$(pwd)/scripts:$PATH"
 ln -sf mock-tiup.sh scripts/tiup
 
 # 启动应用
-./scripts/start-dev.sh
+make dev
 ```
 
 ### 方法 2: 修改后端代码使用 mock
 
-编辑 `backend/app/services/tiup_service.py`:
-
-```python
-def execute_command(command: str) -> str:
-    """Execute tiup command and return output"""
-    try:
-        # 添加这行使用 mock
-        if "tiup" in command:
-            command = command.replace("tiup", "./scripts/mock-tiup.sh")
-        
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
-        return result.stdout
-    except subprocess.TimeoutExpired:
-        raise Exception("Command execution timeout")
-    except Exception as e:
-        raise Exception(f"Command execution failed: {str(e)}")
-```
+编辑 `backend-go/tiup_service.go`，将 tiup 命令替换为 mock 脚本路径。
 
 ## 单元测试
 
-运行后端单元测试:
+运行后端测试:
 
 ```bash
-cd backend
-source venv/bin/activate
-pytest tests/ -v
-```
-
-预期输出:
-```
-tests/test_tiup_service.py::test_parse_cluster_list PASSED
-tests/test_tiup_service.py::test_parse_cluster_display PASSED
-
-====== 2 passed in 0.05s ======
+cd backend-go
+go test ./... -v
 ```
 
 ## API 测试
@@ -79,9 +48,7 @@ curl http://localhost:8000/api/v1/hosts | jq
 
 ### 使用浏览器
 
-访问 API 文档: http://localhost:8000/docs
-
-这是 FastAPI 自动生成的交互式 API 文档,可以直接测试所有端点。
+访问 http://localhost:8000/health 确认后端运行正常。
 
 ## 前端测试
 
@@ -190,15 +157,12 @@ ab -n 1000 -c 10 http://localhost:8000/api/v1/clusters
 ### 后端调试
 
 1. 启用详细日志:
-```python
-# backend/app/main.py
-import logging
-logging.basicConfig(level=logging.DEBUG)
-```
+在 `backend-go/config.yaml` 中设置 log level 为 debug。
 
-2. 查看实时请求:
+2. 查看实时日志:
 ```bash
-tail -f /tmp/tiup-visualizer-backend.log
+# 开发模式日志直接输出到终端
+make dev
 ```
 
 ### 前端调试
@@ -242,7 +206,7 @@ tail -f /tmp/tiup-visualizer-backend.log
 ## 测试人员: XXX
 
 ### 环境
-- Python: 3.11.x
+- Go: 1.22.x
 - Node.js: 20.x
 - Browser: Chrome 120.x
 

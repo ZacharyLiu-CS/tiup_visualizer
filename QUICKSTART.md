@@ -6,33 +6,33 @@
 
 ```bash
 cd tiup-visualizer
-./scripts/start-dev.sh
+make dev
 ```
 
-**这个脚本会自动完成:**
-- ✅ 检查环境 (Python 3, Node.js, TiUP)
-- ✅ 创建 Python 虚拟环境
-- ✅ 安装所有依赖包
-- ✅ 启动后端服务 (端口 8000)
-- ✅ 启动前端服务 (端口 5173)
+**这会同时启动 Go 后端和 Vite 前端开发服务器，** 支持前端热更新。
 
 **访问地址:**
 - 🌐 前端页面: http://localhost:5173
 - 🔧 后端 API: http://localhost:8000
-- 📚 API 文档: http://localhost:8000/docs
 
-**停止服务:** 按 `Ctrl+C`
+**停止服务:** 按 `Ctrl+C`（同时停止前后端）
+
+也可以分别启动：
+```bash
+make dev-backend    # 仅启动后端 (:8000)
+make dev-frontend   # 仅启动前端 (:5173)，需后端已运行
+```
 
 **默认账号:** 用户名 `admin`，密码 `easygraph`
 
-> 修改密码：编辑 `backend/config.yaml` 中的 `auth.username` 和 `auth.password` 字段，重启服务即可。
+> 修改密码：编辑 `backend-go/config.yaml` 中的 `auth.username` 和 `auth.password` 字段，重启服务即可。
 > Nginx 部署模式下修改部署目录的配置：`sudo vim /var/www/tiup-visualizer/config.yaml && sudo systemctl restart tiup-visualizer`
 
 ---
 
 ## 系统要求
 
-- **Python 3.8+** - 运行后端
+- **Go 1.22+** - 运行后端
 - **Node.js 18+** - 构建前端  
 - **TiUP** - 必须已安装并在 PATH 中
 
@@ -101,12 +101,9 @@ docker-compose up -d
 **A:** 需要先安装 TiUP,或确保 tiup 命令在 PATH 中
 
 ### Q: 端口被占用?
-**A:** 修改 `backend/app/core/config.py` 中的端口配置,或在启动命令中指定:
+**A:** 修改 `backend-go/config.yaml` 中的端口配置，或设置环境变量：
 ```bash
-# 后端使用其他端口
-cd backend
-source venv/bin/activate
-python -m uvicorn app.main:app --port 8080
+LISTEN_ADDR=:8080 make dev
 ```
 
 ### Q: 看不到集群数据?
@@ -119,20 +116,20 @@ python -m uvicorn app.main:app --port 8080
 **A:** 检查:
 1. 后端是否正常启动 (访问 http://localhost:8000/health)
 2. 防火墙设置
-3. CORS 配置 (在 `backend/app/core/config.py`)
 
 ---
 
 ## 日志查看
 
-开发模式下,日志保存在:
-- 后端: `/tmp/tiup-visualizer-backend.log`
-- 前端: `/tmp/tiup-visualizer-frontend.log`
+开发模式下，日志直接输出到终端。
 
-查看实时日志:
+生产部署模式下：
 ```bash
-tail -f /tmp/tiup-visualizer-backend.log
-tail -f /tmp/tiup-visualizer-frontend.log
+# 查看 systemd 服务日志
+sudo journalctl -u tiup-visualizer -f
+
+# 查看 Nginx 日志
+tail -f /var/log/nginx/tiup-visualizer-access.log
 ```
 
 ---

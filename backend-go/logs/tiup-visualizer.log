@@ -1,8 +1,0 @@
-time=2026-02-13T23:58:51.449+08:00 level=INFO msg="Starting TiUP Visualizer" config="AppConfig{AppName:TiUP Visualizer, Debug:false, APIPrefix:/api/v1, RootPath:, ListenAddr::8000, Auth.Username:admin}"
-time=2026-02-14T00:00:49.022+08:00 level=INFO msg="Starting TiUP Visualizer" config="AppConfig{AppName:TiUP Visualizer, Debug:false, APIPrefix:/api/v1, RootPath:, ListenAddr::8000, Auth.Username:admin}"
-time=2026-02-14T00:00:49.023+08:00 level=INFO msg=Listening addr=:8000
-time=2026-02-14T00:01:33.699+08:00 level=INFO msg="Starting TiUP Visualizer" config="AppConfig{AppName:TiUP Visualizer, Debug:false, APIPrefix:/api/v1, RootPath:, ListenAddr::8000, Auth.Username:admin}"
-time=2026-02-14T00:01:33.699+08:00 level=INFO msg=Listening addr=:8000
-time=2026-02-14T00:01:47.334+08:00 level=INFO msg="User logged in" username=admin
-time=2026-02-14T00:02:50.361+08:00 level=INFO msg="WebSocket terminal opened" user=admin
-time=2026-02-14T00:03:13.499+08:00 level=INFO msg="WebSocket terminal closed" user=admin
