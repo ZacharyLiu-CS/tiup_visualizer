@@ -26,18 +26,19 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	tokenStr := r.URL.Query().Get("token")
 	username, ok := s.auth.VerifyToken(tokenStr)
 	if !ok {
+		slog.Warn("Terminal auth failed", "remote", r.RemoteAddr)
 		http.Error(w, "Authentication required", http.StatusUnauthorized)
 		return
 	}
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		slog.Error("WebSocket upgrade failed", "error", err)
+		slog.Error("WebSocket upgrade failed", "error", err, "user", username, "remote", r.RemoteAddr)
 		return
 	}
 	defer conn.Close()
 
-	slog.Info("WebSocket terminal opened", "user", username)
+	slog.Info("WebSocket terminal opened", "user", username, "remote", r.RemoteAddr)
 
 	// Start bash with PTY
 	cmd := exec.Command("/bin/bash", "--login")
@@ -45,12 +46,14 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
-		slog.Error("Failed to start PTY", "error", err)
+		slog.Error("Failed to start PTY", "error", err, "user", username)
 		conn.WriteMessage(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "Failed to start terminal"))
 		return
 	}
 	defer ptmx.Close()
+
+	slog.Info("PTY started", "user", username, "pid", cmd.Process.Pid)
 
 	// Set default terminal size
 	setTerminalSize(ptmx, 24, 80)
@@ -72,9 +75,12 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		cleanupMu.Lock()
 		defer cleanupMu.Unlock()
 		if cleanedUp {
+			slog.Debug("Cleanup already done", "user", username)
 			return
 		}
 		cleanedUp = true
+
+		slog.Info("Cleaning up terminal", "user", username, "pid", cmd.Process.Pid)
 
 		ptmx.Close()
 
@@ -82,12 +88,15 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			cmd.Process.Signal(syscall.SIGTERM)
 			done := make(chan struct{})
 			go func() {
-				cmd.Wait()
+				err := cmd.Wait()
+				slog.Info("Process exited", "user", username, "pid", cmd.Process.Pid, "wait_err", err)
 				close(done)
 			}()
 			select {
 			case <-done:
+				slog.Debug("Process exited gracefully", "user", username, "pid", cmd.Process.Pid)
 			case <-time.After(1 * time.Second):
+				slog.Warn("Force killing process", "user", username, "pid", cmd.Process.Pid)
 				cmd.Process.Signal(syscall.SIGKILL)
 				cmd.Wait()
 			}
@@ -103,11 +112,13 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		for {
 			n, err := ptmx.Read(buf)
 			if err != nil {
+				slog.Info("PTY read ended", "user", username, "error", err)
 				return
 			}
 			if n > 0 {
 				touchActivity()
 				if err := conn.WriteMessage(websocket.BinaryMessage, buf[:n]); err != nil {
+					slog.Info("WebSocket write failed", "user", username, "error", err)
 					return
 				}
 			}
@@ -143,6 +154,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	for {
 		msgType, msg, err := conn.ReadMessage()
 		if err != nil {
+			slog.Info("WebSocket read ended", "user", username, "error", err, "msgType", msgType)
 			break
 		}
 
@@ -158,22 +170,25 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 					var rows, cols int
 					if _, err := fmt.Sscanf(parts[1]+":"+parts[2], "%d:%d", &rows, &cols); err == nil {
 						setTerminalSize(ptmx, rows, cols)
+						slog.Debug("Terminal resized", "user", username, "rows", rows, "cols", cols)
 					}
 				}
 				continue
 			}
 			if _, err := ptmx.Write(msg); err != nil {
+				slog.Info("PTY write failed", "user", username, "error", err)
 				goto exit
 			}
 		case websocket.BinaryMessage:
 			if _, err := ptmx.Write(msg); err != nil {
+				slog.Info("PTY write failed", "user", username, "error", err)
 				goto exit
 			}
 		}
 	}
 
 exit:
-	slog.Info("WebSocket terminal closed", "user", username)
+	slog.Info("WebSocket terminal closed", "user", username, "pid", cmd.Process.Pid)
 }
 
 func setTerminalSize(f *os.File, rows, cols int) {

@@ -81,7 +81,8 @@ export default {
       wsConnected: false,
       isMaximized: false,
       resizeObserver: null,
-      _initialized: false
+      _initialized: false,
+      _connectionDead: false  // Flag to indicate terminal needs full rebuild
     }
   },
   computed: {
@@ -126,9 +127,26 @@ export default {
      * Called on first open only; subsequent opens skip this.
      */
     ensureInitialized() {
-      if (this._initialized) return
+      // If connection is dead (bash exited), rebuild everything
+      if (this._connectionDead) {
+        this.rebuildTerminal()
+        return
+      }
+
+      if (this._initialized) {
+        // Already initialized - check if we need to reconnect WebSocket
+        this.ensureWebSocketConnected()
+        return
+      }
       this._initialized = true
 
+      this.createTerminal()
+    },
+
+    /**
+     * Create a new Terminal instance (called once during init or rebuild).
+     */
+    createTerminal() {
       this.terminal = new Terminal({
         cursorBlink: true,
         fontSize: 14,
@@ -173,6 +191,57 @@ export default {
       })
 
       this.connectWebSocket()
+    },
+
+    /**
+     * Rebuild the entire terminal (used when connection dies and user reopens).
+     */
+    rebuildTerminal() {
+      // Clean up old resources
+      if (this.resizeObserver) {
+        this.resizeObserver.disconnect()
+        this.resizeObserver = null
+      }
+
+      if (this.ws) {
+        this.ws.onopen = null
+        this.ws.onmessage = null
+        this.ws.onclose = null
+        this.ws.onerror = null
+        if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
+          this.ws.close()
+        }
+        this.ws = null
+      }
+
+      if (this.terminal) {
+        this.terminal.dispose()
+        this.terminal = null
+      }
+
+      this.fitAddon = null
+      this.wsConnected = false
+      this._connectionDead = false
+      this._initialized = true
+
+      // Recreate terminal
+      this.createTerminal()
+
+      // Re-attach to visible container if visible
+      if (this.visible) {
+        this.$nextTick(() => this.attachTerminal())
+      }
+    },
+
+    /**
+     * Ensure WebSocket is connected. Trigger rebuild if dead.
+     */
+    ensureWebSocketConnected() {
+      // If connection is dead or ws is closed/closing, rebuild
+      if (this._connectionDead || !this.ws || this.ws.readyState === WebSocket.CLOSED || this.ws.readyState === WebSocket.CLOSING) {
+        this._connectionDead = true  // Ensure rebuild happens
+        this.rebuildTerminal()
+      }
     },
 
     /**
@@ -233,6 +302,17 @@ export default {
     },
 
     connectWebSocket() {
+      // Clean up old WebSocket if exists
+      if (this.ws) {
+        this.ws.onopen = null
+        this.ws.onmessage = null
+        this.ws.onclose = null
+        this.ws.onerror = null
+        if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
+          this.ws.close()
+        }
+      }
+
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
       const basePath = import.meta.env.BASE_URL.replace(/\/+$/, '')
       const token = localStorage.getItem('auth_token') || ''
@@ -243,6 +323,10 @@ export default {
 
       this.ws.onopen = () => {
         this.wsConnected = true
+        // Clear reconnecting message if present
+        if (this.terminal) {
+          this.terminal.write('\x1b[2K\r')  // Clear current line
+        }
         this.sendResize()
       }
 
@@ -257,13 +341,20 @@ export default {
 
       this.ws.onclose = () => {
         this.wsConnected = false
+        // Mark terminal as dead - will be rebuilt on next open
+        this._connectionDead = true
+        // Show message to user
         if (this.terminal) {
-          this.terminal.write('\r\n\x1b[31m[Connection closed]\x1b[0m\r\n')
+          this.terminal.write('\r\n\x1b[31m[Session ended]\x1b[0m\r\n')
+          this.terminal.write('\x1b[33m[Close and reopen terminal to start a new session]\x1b[0m\r\n')
         }
       }
 
       this.ws.onerror = () => {
         this.wsConnected = false
+        if (this.terminal) {
+          this.terminal.write('\r\n\x1b[31m[Connection error]\x1b[0m\r\n')
+        }
       }
     },
 
@@ -318,6 +409,7 @@ export default {
       this.wsConnected = false
       this.isMaximized = false
       this._initialized = false
+      this._connectionDead = false
     }
   },
   mounted() {
