@@ -40,6 +40,9 @@ backend-only: ensure-static
 
 # Full production build: frontend + backend + deployment package
 build: backend package
+	@rm -rf $(STATIC_DIR)/*
+	@touch $(STATIC_DIR)/.gitkeep
+	@echo "==> Cleaned embedded static files from $(STATIC_DIR)/"
 	@echo "==> Build complete! Deployment package in $(BUILD_DIR)/"
 
 # Create deployment package in build/
