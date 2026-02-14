@@ -1,7 +1,13 @@
 <template>
+  <!--
+    Hidden host: keeps xterm DOM alive when the panel is closed.
+    Positioned off-screen so it doesn't affect layout.
+  -->
+  <div ref="hiddenHost" class="terminal-hidden-host"></div>
+
   <!-- Float (overlay) mode -->
   <teleport to="body">
-    <transition name="fade">
+    <transition name="fade" @after-leave="onTransitionLeave">
       <div v-if="mode === 'float' && visible" class="terminal-overlay" @click.self="handleClose">
         <div class="terminal-window" :class="{ maximized: isMaximized }">
           <div class="terminal-titlebar">
@@ -29,7 +35,7 @@
 
   <!-- Panel (slide) modes -->
   <teleport to="body">
-    <transition :name="slideTransitionName">
+    <transition :name="slideTransitionName" @after-leave="onTransitionLeave">
       <div v-if="mode !== 'float' && visible" class="terminal-panel" :class="panelClass">
         <div class="terminal-titlebar">
           <div class="terminal-title">
@@ -48,9 +54,6 @@
       </div>
     </transition>
   </teleport>
-
-  <!-- Hidden persistent container that keeps the xterm DOM alive -->
-  <div ref="terminalHost" class="terminal-host-hidden"></div>
 </template>
 
 <script>
@@ -81,8 +84,8 @@ export default {
       wsConnected: false,
       isMaximized: false,
       resizeObserver: null,
-      _initialized: false,
-      _connectionDead: false  // Flag to indicate terminal needs full rebuild
+      // Track whether session was ended by exit/disconnect (not user closing panel)
+      sessionDead: false
     }
   },
   computed: {
@@ -97,23 +100,42 @@ export default {
         left: 'slide-left'
       }
       return map[this.mode] || 'slide-top'
+    },
+    /** Whether we have a living session that can be reused */
+    hasLiveSession() {
+      return (
+        this.terminal &&
+        this.ws &&
+        this.ws.readyState === WebSocket.OPEN &&
+        !this.sessionDead
+      )
     }
   },
   watch: {
     visible(val) {
       if (val) {
-        this.ensureInitialized()
-        this.$nextTick(() => this.attachTerminal())
+        this._waitForTarget(() => {
+          if (this.hasLiveSession) {
+            // Reuse existing session: move xterm DOM into the visible container
+            this.reattachTerminal()
+          } else {
+            // No live session: destroy stale resources and create fresh
+            this.destroyTerminal()
+            this.createAndAttach()
+          }
+        })
       } else {
-        // Just detach — move xterm DOM back to the hidden host.
-        // Do NOT destroy; we reuse on next open.
-        this.$nextTick(() => this.detachTerminal())
+        // Panel closing: park xterm DOM into hidden host so it survives v-if removal
+        this.parkTerminal()
       }
     },
     mode() {
-      if (this.visible) {
-        // Mode changed while open: move xterm DOM to the new container
-        this.$nextTick(() => this.attachTerminal())
+      if (this.visible && this.terminal) {
+        this.$nextTick(() => {
+          this._waitForTarget(() => {
+            this.reattachTerminal()
+          })
+        })
       }
     }
   },
@@ -123,30 +145,107 @@ export default {
     },
 
     /**
-     * One-time initialization: create Terminal + WebSocket.
-     * Called on first open only; subsequent opens skip this.
+     * Called by <transition @after-leave> — transition animation is fully done.
+     * Terminal is already parked in hidden host, so nothing to destroy here
+     * unless the session is dead.
      */
-    ensureInitialized() {
-      // If connection is dead (bash exited), rebuild everything
-      if (this._connectionDead) {
-        this.rebuildTerminal()
-        return
+    onTransitionLeave() {
+      if (this.sessionDead) {
+        this.destroyTerminal()
       }
-
-      if (this._initialized) {
-        // Already initialized - check if we need to reconnect WebSocket
-        this.ensureWebSocketConnected()
-        return
-      }
-      this._initialized = true
-
-      this.createTerminal()
     },
 
     /**
-     * Create a new Terminal instance (called once during init or rebuild).
+     * Poll until the target container ref exists (transition may not have rendered yet).
      */
-    createTerminal() {
+    _waitForTarget(callback, maxRetries = 30) {
+      let retries = 0
+      const poll = () => {
+        const target = this._getTarget()
+        if (target) {
+          callback()
+          return
+        }
+        if (retries < maxRetries && this.visible) {
+          retries++
+          setTimeout(poll, 30)
+          return
+        }
+        callback()
+      }
+      this.$nextTick(poll)
+    },
+
+    _getTarget() {
+      return this.mode === 'float' ? this.$refs.floatBody : this.$refs.panelBody
+    },
+
+    /**
+     * Move xterm DOM from wherever it is into the hidden host div.
+     * This keeps it alive when the panel v-if removes the container.
+     */
+    parkTerminal() {
+      if (!this.terminal || !this.terminal.element) return
+      const hidden = this.$refs.hiddenHost
+      if (!hidden) return
+      const el = this.terminal.element
+      if (el.parentNode !== hidden) {
+        hidden.appendChild(el)
+      }
+      // Disconnect resize observer since the panel is hidden
+      if (this.resizeObserver) {
+        this.resizeObserver.disconnect()
+      }
+    },
+
+    /**
+     * Move xterm DOM from hidden host back into the visible container.
+     * Reuse existing terminal + WebSocket session.
+     */
+    reattachTerminal() {
+      const target = this._getTarget()
+      if (!target || !this.terminal || !this.terminal.element) return
+
+      const el = this.terminal.element
+      if (el.parentNode !== target) {
+        target.appendChild(el)
+      }
+
+      // Re-setup resize observer on the new target
+      if (this.resizeObserver) {
+        this.resizeObserver.disconnect()
+      }
+      this.resizeObserver = new ResizeObserver(() => {
+        if (this.fitAddon && this.terminal && this.visible) {
+          try { this.fitAddon.fit() } catch (_) { /* ignore */ }
+          this.sendResize()
+        }
+      })
+      this.resizeObserver.observe(target)
+
+      // Fit to the new container size
+      this.$nextTick(() => {
+        if (this.fitAddon) {
+          try { this.fitAddon.fit() } catch (_) { /* ignore */ }
+          this.sendResize()
+        }
+        // Ensure terminal gets focus
+        if (this.terminal) {
+          this.terminal.focus()
+        }
+      })
+    },
+
+    /**
+     * Create a brand-new terminal + WebSocket and attach into the visible container.
+     * Only called when there's no live session to reuse.
+     */
+    createAndAttach() {
+      this.sessionDead = false
+
+      const target = this._getTarget()
+      if (!target) return
+
       this.terminal = new Terminal({
         cursorBlink: true,
         fontSize: 14,
@@ -181,8 +280,7 @@ export default {
       this.terminal.loadAddon(this.fitAddon)
       this.terminal.loadAddon(new WebLinksAddon())
 
-      // Open xterm into the hidden host first (keeps DOM alive)
-      this.terminal.open(this.$refs.terminalHost)
+      this.terminal.open(target)
 
       this.terminal.onData(data => {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -191,79 +289,7 @@ export default {
       })
 
       this.connectWebSocket()
-    },
 
-    /**
-     * Rebuild the entire terminal (used when connection dies and user reopens).
-     */
-    rebuildTerminal() {
-      // Clean up old resources
-      if (this.resizeObserver) {
-        this.resizeObserver.disconnect()
-        this.resizeObserver = null
-      }
-
-      if (this.ws) {
-        this.ws.onopen = null
-        this.ws.onmessage = null
-        this.ws.onclose = null
-        this.ws.onerror = null
-        if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
-          this.ws.close()
-        }
-        this.ws = null
-      }
-
-      if (this.terminal) {
-        this.terminal.dispose()
-        this.terminal = null
-      }
-
-      this.fitAddon = null
-      this.wsConnected = false
-      this._connectionDead = false
-      this._initialized = true
-
-      // Recreate terminal
-      this.createTerminal()
-
-      // Re-attach to visible container if visible
-      if (this.visible) {
-        this.$nextTick(() => this.attachTerminal())
-      }
-    },
-
-    /**
-     * Ensure WebSocket is connected. Trigger rebuild if dead.
-     */
-    ensureWebSocketConnected() {
-      // If connection is dead or ws is closed/closing, rebuild
-      if (this._connectionDead || !this.ws || this.ws.readyState === WebSocket.CLOSED || this.ws.readyState === WebSocket.CLOSING) {
-        this._connectionDead = true  // Ensure rebuild happens
-        this.rebuildTerminal()
-      }
-    },
-
-    /**
-     * Move the xterm DOM element into the currently visible body container
-     * and fit to the new size.
-     */
-    attachTerminal() {
-      const target = this.mode === 'float' ? this.$refs.floatBody : this.$refs.panelBody
-      if (!target || !this.terminal) return
-
-      const xtermEl = this.$refs.terminalHost
-      if (!xtermEl) return
-
-      // Move the hidden host (which contains the xterm DOM) into the visible body
-      target.appendChild(xtermEl)
-
-      // Disconnect old observer if any
-      if (this.resizeObserver) {
-        this.resizeObserver.disconnect()
-      }
-
-      // Fit after the layout has settled
       this.$nextTick(() => {
         if (this.fitAddon) {
           try { this.fitAddon.fit() } catch (_) { /* ignore */ }
@@ -271,7 +297,6 @@ export default {
         }
       })
 
-      // Observe the target for future resizes
       this.resizeObserver = new ResizeObserver(() => {
         if (this.fitAddon && this.terminal && this.visible) {
           try { this.fitAddon.fit() } catch (_) { /* ignore */ }
@@ -281,38 +306,7 @@ export default {
       this.resizeObserver.observe(target)
     },
 
-    /**
-     * Move xterm DOM back to be a direct child of body (hidden via CSS).
-     * This keeps the DOM alive but invisible.
-     */
-    detachTerminal() {
-      const xtermEl = this.$refs.terminalHost
-      if (!xtermEl) return
-
-      // If it's currently inside a floatBody/panelBody, move it back to body
-      // so it stays alive but hidden. The CSS class .terminal-host-hidden hides it.
-      if (xtermEl.parentNode && xtermEl.parentNode !== document.body) {
-        document.body.appendChild(xtermEl)
-      }
-
-      if (this.resizeObserver) {
-        this.resizeObserver.disconnect()
-        this.resizeObserver = null
-      }
-    },
-
     connectWebSocket() {
-      // Clean up old WebSocket if exists
-      if (this.ws) {
-        this.ws.onopen = null
-        this.ws.onmessage = null
-        this.ws.onclose = null
-        this.ws.onerror = null
-        if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
-          this.ws.close()
-        }
-      }
-
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
       const basePath = import.meta.env.BASE_URL.replace(/\/+$/, '')
       const token = localStorage.getItem('auth_token') || ''
@@ -323,10 +317,6 @@ export default {
 
       this.ws.onopen = () => {
         this.wsConnected = true
-        // Clear reconnecting message if present
-        if (this.terminal) {
-          this.terminal.write('\x1b[2K\r')  // Clear current line
-        }
         this.sendResize()
       }
 
@@ -341,12 +331,22 @@ export default {
 
       this.ws.onclose = () => {
         this.wsConnected = false
-        // Mark terminal as dead - will be rebuilt on next open
-        this._connectionDead = true
-        // Show message to user
-        if (this.terminal) {
-          this.terminal.write('\r\n\x1b[31m[Session ended]\x1b[0m\r\n')
-          this.terminal.write('\x1b[33m[Close and reopen terminal to start a new session]\x1b[0m\r\n')
+        this.sessionDead = true
+        // Clean up ws reference
+        if (this.ws) {
+          this.ws.onopen = null
+          this.ws.onmessage = null
+          this.ws.onclose = null
+          this.ws.onerror = null
+          this.ws = null
+        }
+        // Session ended (e.g. user typed exit) — auto-close the terminal panel
+        if (this.visible) {
+          setTimeout(() => {
+            if (this.visible) {
+              this.$emit('close')
+            }
+          }, 0)
         }
       }
 
@@ -377,7 +377,7 @@ export default {
     },
 
     /**
-     * Full cleanup — only called on page unload (beforeUnmount).
+     * Full cleanup — destroy terminal + WebSocket completely.
      */
     destroyTerminal() {
       if (this.resizeObserver) {
@@ -390,56 +390,40 @@ export default {
         this.ws.onmessage = null
         this.ws.onclose = null
         this.ws.onerror = null
-        this.ws.close()
+        try {
+          if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
+            this.ws.close()
+          }
+        } catch (_) { /* ignore */ }
         this.ws = null
       }
 
       if (this.terminal) {
-        this.terminal.dispose()
+        try { this.terminal.dispose() } catch (_) { /* ignore */ }
         this.terminal = null
-      }
-
-      // Clean up the detached host element from body if it was moved there
-      const xtermEl = this.$refs.terminalHost
-      if (xtermEl && xtermEl.parentNode === document.body) {
-        document.body.removeChild(xtermEl)
       }
 
       this.fitAddon = null
       this.wsConnected = false
-      this.isMaximized = false
-      this._initialized = false
-      this._connectionDead = false
+      this.sessionDead = false
     }
   },
-  mounted() {
-    this._onBeforeUnload = () => this.destroyTerminal()
-    window.addEventListener('beforeunload', this._onBeforeUnload)
-  },
   beforeUnmount() {
-    window.removeEventListener('beforeunload', this._onBeforeUnload)
     this.destroyTerminal()
   }
 }
 </script>
 
 <style scoped>
-/* Hidden host that keeps xterm DOM alive when terminal panel/float is closed */
-.terminal-host-hidden {
-  position: absolute;
-  width: 0;
-  height: 0;
+/* ===== Hidden host: keeps xterm DOM alive off-screen ===== */
+.terminal-hidden-host {
+  position: fixed;
+  left: -9999px;
+  top: -9999px;
+  width: 1px;
+  height: 1px;
   overflow: hidden;
   pointer-events: none;
-}
-
-/* When attached inside a visible body, show it properly */
-.terminal-body .terminal-host-hidden {
-  position: static;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  pointer-events: auto;
 }
 
 /* ===== Fade transition for float overlay ===== */

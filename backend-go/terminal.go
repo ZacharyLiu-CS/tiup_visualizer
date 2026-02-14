@@ -113,6 +113,9 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			n, err := ptmx.Read(buf)
 			if err != nil {
 				slog.Info("PTY read ended", "user", username, "error", err)
+				// PTY closed (bash exited) - close WebSocket to notify frontend
+				conn.WriteMessage(websocket.CloseMessage,
+					websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Process exited"))
 				return
 			}
 			if n > 0 {

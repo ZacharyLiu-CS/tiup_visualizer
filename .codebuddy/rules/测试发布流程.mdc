@@ -1,0 +1,10 @@
+---
+description: 
+alwaysApply: true
+enabled: true
+updatedAt: 2026-02-14T05:57:49.342Z
+provider: 
+---
+
+输入命令 make dev
+部署到 nginx: make build && ./build/deploy-nginx.sh
