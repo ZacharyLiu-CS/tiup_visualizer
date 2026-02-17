@@ -1,0 +1,72 @@
+version: v2.0
+
+on:
+  push: ["master"]
+  mr: ["*"]
+
+
+stages:
+  - name: "TiUP Visualizer CI Flow"
+    jobs:
+      job_id:
+        name: "TiUP Visualizer CI"
+        runs-on:
+          pool-name: docker
+          container:
+            image: mirrors.tencent.com/nodejs-modern/tencentos4-ci:24.13.0
+
+        steps:
+          - name: Install Go env
+            env:
+              GO_VERSION: "1.22.10"
+            run: |
+              rm -rf /usr/local/go \
+              && curl -O https://dl.google.com/go/go$GO_VERSION.linux-amd64.tar.gz \
+              && tar -C /usr/local -xzf go$GO_VERSION.linux-amd64.tar.gz \
+              && rm go$GO_VERSION.linux-amd64.tar.gz \
+              && export PATH="/usr/local/go/bin:$PATH" && export GOPATH=$(go env GOPATH) \
+          - name: Install Dependencies
+            run: yum install -y git-lfs make
+          - name: Checkout Code
+            checkout: self
+            with:
+              localPath: ./tiup-visualizer
+          - uses: sshconfig@1.*
+            name: Configure git.woa SSH private key
+            with:
+              credentialId: tiup_ssh_key
+              filename: id_rsa_for_git
+          - name: Build TiUP Visualizer Project
+            run: |
+              export PATH="/usr/local/go/bin:$PATH" && \
+              export GOPATH=$(go env GOPATH)&& \
+              cd tiup-visualizer && \ 
+              make build
+          - name: Pack TiUP Visualizer Package  
+            run: |
+              #!/bin/bash
+              cd ./tiup-visualizer
+              NC='\033[0m'
+              TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+              ZIP_FILENAME="tiup-visualizer-${TIMESTAMP}.tar.gz"
+
+              # Create zip file
+              echo -e "${YELLOW}Compressing build directory...${NC}"
+              cd "$PROJECT_ROOT"
+              tar -czf "$ZIP_FILENAME" --transform 's/^build/tiup-visualizer/' build
+
+              if [ ! -f "$ZIP_FILENAME" ]; then
+                  echo -e "${RED}Error: Failed to create zip file${NC}"
+                  exit 1
+              fi
+              echo -e "${GREEN}Zip file created: $ZIP_FILENAME${NC}"
+          - uses: UploadArtifactory@8.*
+            name: Upload TiUP Visualizer Package
+            with:
+              filePath: tiup-visualizer/*.tar.gz
+          - name: Clean Data
+            run: |
+              rm -rf tiup-visualizer
+notices:
+  # 执行完毕后，发送企业微信通知
+  - type: wework-message
