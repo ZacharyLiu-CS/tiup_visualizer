@@ -87,6 +87,17 @@ stages:
               ld_selectop: "create_one_tag"
               ld_input_src_branch: "master"
               ld_input_dst_branch: "release_v1.0.${{ ci.build_num }}"
+          - name: Upload release file
+            id: upload_release
+            uses: "gitbranchop@3.*"
+            with:
+              git_type: "git_woa"
+              code_auth_type: "GIT_CI"
+              repositoryUrl: ${{ci.repo_url}}
+              git_private_token: ${{ci.token}}
+              ld_selectop: "upload_one_attachment"
+              ld_input_branch: "release_v1.0.${{ ci.build_num }}"
+              ld_input_upload_file_name: "tiup-visualizer/*.tar.gz"
           - name: Clean Data
             run: |
               rm -rf tiup-visualizer
