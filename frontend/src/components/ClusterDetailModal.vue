@@ -87,6 +87,12 @@
                               @click="downloadLog(component, logFile.filename)"
                               title="Download log file"
                             >Download</button>
+                            <button
+                              class="log-btn log-btn-ai"
+                              :class="{ 'log-btn-ai-copied': aiCopyStatus[`${component.id}-${logFile.filename}`] === 'copied' }"
+                              @click="aiAnalysis(component, logFile.filename)"
+                              :title="aiCopyStatus[`${component.id}-${logFile.filename}`] === 'copied' ? 'Prompt copied! Paste it in Yuanbao' : 'Copy prompt + Download log + Open Yuanbao'"
+                            >{{ aiCopyStatus[`${component.id}-${logFile.filename}`] === 'copied' ? 'Copied!' : 'AI Analysis' }}</button>
                           </div>
                         </div>
                       </div>
@@ -100,11 +106,22 @@
         </div>
       </div>
     </div>
+
+    <!-- Toast notification -->
+    <transition name="toast">
+      <div v-if="toastVisible" class="ai-toast">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18">
+          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" />
+        </svg>
+        <span>{{ toastMessage }}</span>
+      </div>
+    </transition>
   </div>
 </template>
 
 <script>
 import { clusterAPI } from '../services/api'
+import { buildAIPrompt } from '../config/ai-prompt'
 
 export default {
   name: 'ClusterDetailModal',
@@ -114,10 +131,26 @@ export default {
       default: null
     }
   },
-  emits: ['close'],
+  emits: ['close', 'openAIAnalysis'],
+  data() {
+    return {
+      aiCopyStatus: {},
+      toastMessage: '',
+      toastVisible: false,
+      toastTimer: null
+    }
+  },
   methods: {
     close() {
       this.$emit('close')
+    },
+    showToast(msg) {
+      this.toastMessage = msg
+      this.toastVisible = true
+      if (this.toastTimer) clearTimeout(this.toastTimer)
+      this.toastTimer = setTimeout(() => {
+        this.toastVisible = false
+      }, 4000)
     },
     getStatusClass(status) {
       if (status.includes('Up')) return 'status-up'
@@ -146,6 +179,67 @@ export default {
       document.body.appendChild(link)
       link.click()
       document.body.removeChild(link)
+    },
+    async aiAnalysis(component, filename) {
+      const key = `${component.id}-${filename}`
+
+      // 1. Build and copy prompt to clipboard
+      const prompt = buildAIPrompt({
+        clusterName: this.clusterDetail.cluster_name,
+        clusterVersion: this.clusterDetail.cluster_version,
+        clusterType: this.clusterDetail.cluster_type,
+        componentRole: component.role,
+        componentId: component.id,
+        componentHost: component.host,
+        componentStatus: component.status,
+        logFilename: filename,
+        deployDir: component.deploy_dir,
+        dataDir: component.data_dir,
+        ports: component.ports,
+      })
+
+      try {
+        await navigator.clipboard.writeText(prompt)
+      } catch {
+        const textarea = document.createElement('textarea')
+        textarea.value = prompt
+        textarea.style.position = 'fixed'
+        textarea.style.opacity = '0'
+        document.body.appendChild(textarea)
+        textarea.select()
+        document.execCommand('copy')
+        document.body.removeChild(textarea)
+      }
+
+      this.aiCopyStatus = { ...this.aiCopyStatus, [key]: 'copied' }
+      setTimeout(() => {
+        const s = { ...this.aiCopyStatus }
+        delete s[key]
+        this.aiCopyStatus = s
+      }, 3000)
+
+      // 2. Download tail 1KB of log file
+      const tailUrl = clusterAPI.getLogFileUrl(
+        this.clusterDetail.cluster_name,
+        component.id,
+        filename,
+        'download',
+        1024
+      )
+      const link = document.createElement('a')
+      link.href = tailUrl
+      const baseName = filename.replace(/\.[^/.]+$/, '')
+      const ext = filename.includes('.') ? filename.substring(filename.lastIndexOf('.')) : '.log'
+      link.download = `${baseName}_for_ai${ext}`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+
+      // 3. Show toast notification
+      this.showToast('分析提示词已复制至剪贴板，粘贴到对话框即可使用')
+
+      // 4. Emit event to open AI panel
+      this.$emit('openAIAnalysis')
     }
   }
 }
@@ -413,7 +507,7 @@ export default {
   cursor: pointer;
   transition: all 0.2s;
   white-space: nowrap;
-  width: 68px;
+  min-width: 68px;
   text-align: center;
   box-sizing: border-box;
 }
@@ -436,6 +530,21 @@ export default {
 .log-btn-download:hover {
   background: #a7f3d0;
   color: #064e3b;
+}
+
+.log-btn-ai {
+  background: #ede9fe;
+  color: #6d28d9;
+}
+
+.log-btn-ai:hover {
+  background: #ddd6fe;
+  color: #5b21b6;
+}
+
+.log-btn-ai-copied {
+  background: #d1fae5;
+  color: #065f46;
 }
 
 .no-logs {
@@ -502,5 +611,48 @@ export default {
 .status-unknown {
   background: #f3f4f6;
   color: #6b7280;
+}
+
+/* Toast notification */
+.ai-toast {
+  position: fixed;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1e1e2e;
+  color: #a5f3fc;
+  padding: 12px 24px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  z-index: 9999;
+  border: 1px solid #7c3aed;
+}
+
+.ai-toast svg {
+  color: #34d399;
+  flex-shrink: 0;
+}
+
+.toast-enter-active {
+  transition: all 0.3s ease-out;
+}
+
+.toast-leave-active {
+  transition: all 0.3s ease-in;
+}
+
+.toast-enter-from {
+  opacity: 0;
+  transform: translateX(-50%) translateY(-20px);
+}
+
+.toast-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(-20px);
 }
 </style>

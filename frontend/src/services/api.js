@@ -47,9 +47,13 @@ export const clusterAPI = {
   getClusterDetail: (clusterName) => api.get(`/clusters/${clusterName}`),
   getAllHosts: () => api.get('/hosts'),
   getHostClusters: (hostIp) => api.get(`/hosts/${hostIp}/clusters`),
-  getLogFileUrl: (clusterName, componentId, filename, action = 'view') => {
+  getLogFileUrl: (clusterName, componentId, filename, action = 'view', tail = 0) => {
     const token = localStorage.getItem('auth_token')
-    return `${base}/api/v1/logs/${encodeURIComponent(clusterName)}/${encodeURIComponent(componentId)}/${encodeURIComponent(filename)}?action=${action}&token=${encodeURIComponent(token || '')}`
+    let url = `${base}/api/v1/logs/${encodeURIComponent(clusterName)}/${encodeURIComponent(componentId)}/${encodeURIComponent(filename)}?action=${action}&token=${encodeURIComponent(token || '')}`
+    if (tail > 0) {
+      url += `&tail=${tail}`
+    }
+    return url
   },
 }
 

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -204,6 +205,12 @@ func (s *Server) handleLogFile(w http.ResponseWriter, r *http.Request) {
 	if action == "" {
 		action = "view"
 	}
+	tailBytes := int64(0)
+	if tb := r.URL.Query().Get("tail"); tb != "" {
+		if v, err := strconv.ParseInt(tb, 10, 64); err == nil && v > 0 {
+			tailBytes = v
+		}
+	}
 
 	logPath, component, err := s.tiup.GetLogFilePath(clusterName, componentID, filename)
 	if err != nil {
@@ -222,7 +229,11 @@ func (s *Server) handleLogFile(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, fmt.Sprintf("Log file not found: %s", logPath))
 			return
 		}
-		serveLocalFile(w, logPath, filename, action)
+		if tailBytes > 0 {
+			serveLocalFileTail(w, logPath, filename, action, tailBytes)
+		} else {
+			serveLocalFile(w, logPath, filename, action)
+		}
 	} else {
 		// Remote file via SSH
 		detail, err := s.tiup.GetClusterDetail(clusterName)
@@ -231,15 +242,24 @@ func (s *Server) handleLogFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		deployUser := detail.DeployUser
-		sshCmd := fmt.Sprintf("ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 %s@%s 'cat %s'", deployUser, host, logPath)
+		var sshCmd string
+		if tailBytes > 0 {
+			sshCmd = fmt.Sprintf("ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 %s@%s 'tail -c %d %s'", deployUser, host, tailBytes, logPath)
+		} else {
+			sshCmd = fmt.Sprintf("ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 %s@%s 'cat %s'", deployUser, host, logPath)
+		}
 		content, err := ExecuteCommand(sshCmd, 30*time.Second)
 		if err != nil {
 			writeError(w, http.StatusNotFound, fmt.Sprintf("Failed to read log file from %s:%s - %v", host, logPath, err))
 			return
 		}
+		dlName := filename
+		if tailBytes > 0 {
+			dlName = tailFilename(filename)
+		}
 		if action == "download" {
 			w.Header().Set("Content-Type", "application/octet-stream")
-			w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filename))
+			w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", dlName))
 			w.Write([]byte(content))
 		} else {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -335,6 +355,51 @@ func serveLocalFile(w http.ResponseWriter, logPath, filename, action string) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Write(content)
 	}
+}
+
+func tailFilename(filename string) string {
+	ext := filepath.Ext(filename)
+	base := strings.TrimSuffix(filename, ext)
+	if ext == "" {
+		ext = ".log"
+	}
+	return base + "_for_ai" + ext
+}
+
+func serveLocalFileTail(w http.ResponseWriter, logPath, filename, action string, tailBytes int64) {
+	f, err := os.Open(logPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	offset := info.Size() - tailBytes
+	if offset < 0 {
+		offset = 0
+	}
+
+	buf := make([]byte, info.Size()-offset)
+	_, err = f.ReadAt(buf, offset)
+	if err != nil && err != io.EOF {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	dlName := tailFilename(filename)
+	if action == "download" {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", dlName))
+	} else {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	}
+	w.Write(buf)
 }
 
 func getLocalIPs() []string {

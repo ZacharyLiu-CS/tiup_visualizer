@@ -46,6 +46,30 @@
           </svg>
           Server Logs
         </button>
+        <div class="ai-select-group" ref="aiSelectGroup">
+          <button class="header-btn header-btn-ai" @click="showAIDropdown = !showAIDropdown" title="Open AI Assistant">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+              <path d="M12 2a4 4 0 014 4v1h1a3 3 0 013 3v1a3 3 0 01-3 3h-1v4a4 4 0 01-8 0v-4H7a3 3 0 01-3-3v-1a3 3 0 013-3h1V6a4 4 0 014-4z" />
+              <circle cx="9" cy="10" r="1" fill="currentColor" /><circle cx="15" cy="10" r="1" fill="currentColor" />
+            </svg>
+            AI Analysis
+            <svg class="ai-arrow" :class="{ open: showAIDropdown }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="12" height="12">
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </button>
+          <transition name="dropdown">
+            <ul v-show="showAIDropdown" class="ai-dropdown">
+              <li v-for="opt in aiPlatformOptions" :key="opt.value"
+                  :class="{ active: aiPlatform === opt.value }"
+                  @click="selectAIPlatform(opt)">
+                <span class="ai-opt-label">{{ opt.label }}</span>
+                <svg v-if="aiPlatform === opt.value" class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              </li>
+            </ul>
+          </transition>
+        </div>
         <button v-if="selectedHost || selectedCluster" @click="clearSelection" class="header-btn">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
             <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
@@ -129,8 +153,25 @@
       <ClusterDetailModal 
         :clusterDetail="clusterDetail"
         @close="closeClusterDetail"
+        @openAIAnalysis="openAIAnalysisPanel"
       />
     </div>
+
+    <!-- AI Analysis Panel (Right side iframe) -->
+    <transition name="ai-panel">
+      <div v-if="showAIPanel" class="ai-panel">
+        <div class="ai-panel-header">
+          <span class="ai-panel-title">AI Analysis - {{ aiPanelTitle }}</span>
+          <button class="ai-panel-close" @click="closeAIPanel" title="Close">&times;</button>
+        </div>
+        <iframe 
+          class="ai-panel-iframe"
+          :src="aiPanelUrl"
+          frameborder="0"
+          allowfullscreen
+        ></iframe>
+      </div>
+    </transition>
   </div>
 </template>
 
@@ -176,7 +217,16 @@ export default {
         { value: 'left', label: 'Left' },
         { value: 'float', label: 'Float' }
       ],
-      showServerLogs: false
+      showServerLogs: false,
+      showAIPanel: false,
+      showAIDropdown: false,
+      aiPlatform: 'yuanbao',
+      aiPanelUrl: 'https://yuanbao.tencent.com/chat/',
+      aiPanelTitle: 'Yuanbao',
+      aiPlatformOptions: [
+        { value: 'yuanbao', label: 'Yuanbao (元宝)', url: 'https://yuanbao.tencent.com/chat/' },
+        { value: 'kimi', label: 'Kimi', url: 'https://www.kimi.com/' }
+      ]
     }
   },
   computed: {
@@ -255,6 +305,10 @@ export default {
       if (el && !el.contains(e.target)) {
         this.showModeDropdown = false
       }
+      const aiEl = this.$refs.aiSelectGroup
+      if (aiEl && !aiEl.contains(e.target)) {
+        this.showAIDropdown = false
+      }
     },
     async handleHostSelect(host) {
       if (this.selectedHost === host) {
@@ -275,6 +329,19 @@ export default {
     },
     closeClusterDetail() {
       this.clearSelection()
+    },
+    openAIAnalysisPanel() {
+      this.showAIPanel = true
+    },
+    closeAIPanel() {
+      this.showAIPanel = false
+    },
+    selectAIPlatform(opt) {
+      this.aiPlatform = opt.value
+      this.aiPanelUrl = opt.url
+      this.aiPanelTitle = opt.label
+      this.showAIDropdown = false
+      this.showAIPanel = true
     },
     updateConnectionLines() {
       this.connectionLines = []
@@ -650,5 +717,136 @@ export default {
   flex-wrap: wrap;
   gap: 16px;
   position: relative;
+}
+
+/* AI Analysis Panel - Right side iframe */
+.ai-select-group {
+  position: relative;
+}
+
+.header-btn-ai {
+  background: rgba(139, 92, 246, 0.25);
+  border-color: rgba(167, 139, 250, 0.5);
+}
+
+.header-btn-ai:hover {
+  background: rgba(139, 92, 246, 0.4);
+  border-color: rgba(167, 139, 250, 0.8);
+}
+
+.ai-arrow {
+  transition: transform 0.2s;
+  opacity: 0.8;
+}
+
+.ai-arrow.open {
+  transform: rotate(180deg);
+}
+
+.ai-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 200px;
+  background: #1e1e2e;
+  border: 1px solid #313244;
+  border-radius: 8px;
+  padding: 4px;
+  list-style: none;
+  margin: 0;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 1100;
+}
+
+.ai-dropdown li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  color: #cdd6f4;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+
+.ai-dropdown li:hover {
+  background: #313244;
+}
+
+.ai-dropdown li.active {
+  background: #a78bfa;
+  color: #1e1e2e;
+}
+
+.ai-dropdown li .check-icon {
+  margin-left: auto;
+}
+
+.ai-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 50vw;
+  height: 100vh;
+  background: #1e1e2e;
+  border-left: 1px solid #313244;
+  box-shadow: -4px 0 24px rgba(0, 0, 0, 0.3);
+  z-index: 1200;
+  display: flex;
+  flex-direction: column;
+}
+
+.ai-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: linear-gradient(135deg, #6d28d9 0%, #7c3aed 100%);
+  color: white;
+  flex-shrink: 0;
+}
+
+.ai-panel-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.ai-panel-close {
+  background: rgba(255, 255, 255, 0.15);
+  border: none;
+  color: white;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  font-size: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+}
+
+.ai-panel-close:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.ai-panel-iframe {
+  flex: 1;
+  width: 100%;
+  background: white;
+}
+
+/* AI Panel transition */
+.ai-panel-enter-active,
+.ai-panel-leave-active {
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.ai-panel-enter-from,
+.ai-panel-leave-to {
+  transform: translateX(100%);
 }
 </style>
