@@ -64,6 +64,17 @@ stages:
             name: Upload TiUP Visualizer Package
             with:
               filePath: tiup-visualizer/*.tar.gz
+          - name: Create Release Branch
+            id: create_release
+            uses: gitbranchop@3.*
+            with:
+              git_type: "git_woa"
+              code_auth_type: "GIT_CI"
+              repositoryUrl: ${{ci.repo_url}}
+              git_private_token: ${{ci.token}}
+              ld_selectop: "create_one_tag"
+              ld_input_src_branch: "master"
+              ld_input_dst_branch: "release_v1.0.${{ ci.build_num }}"
           - name: Clean Data
             run: |
               rm -rf tiup-visualizer
