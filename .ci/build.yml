@@ -27,6 +27,18 @@ stages:
               && export PATH="/usr/local/go/bin:$PATH" && export GOPATH=$(go env GOPATH) \
           - name: Install Dependencies
             run: yum install -y git-lfs make python3-pip
+          - name: Configure pip.conf
+            run: |
+              mkdir -p ~/.pip && \
+              cat << 'EOF' > ~/.pip/pip.conf
+              [global]
+              index-url = https://bkdevops:@mirrors.tencent.com/repository/pypi/tencent_pypi/simple/
+              extra-index-url = https://bkdevops:@mirrors.tencent.com/pypi/simple/
+              timeout = 600
+
+              [install]
+              trusted-host = mirrors.tencent.com
+              EOF
           - name: Checkout Code
             checkout: self
             with:
