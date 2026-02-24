@@ -3,8 +3,13 @@ name: TiUP Visualizer CI
 on:
   push:
     branches: [master]
+    tags:
+      - "v*.*.*"
   pull_request:
     branches: ["*"]
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -38,18 +43,21 @@ jobs:
 
       - name: Pack TiUP Visualizer Package
         run: |
-          TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-          ZIP_FILENAME="tiup-visualizer-${TIMESTAMP}.tar.gz"
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            ZIP_FILENAME="tiup-visualizer-${{ github.ref_name }}.tar.gz"
+          else
+            TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+            ZIP_FILENAME="tiup-visualizer-${TIMESTAMP}.tar.gz"
+          fi
           tar -czf "$ZIP_FILENAME" --transform 's/^build/tiup-visualizer/' build
           if [ ! -f "$ZIP_FILENAME" ]; then
             echo "Error: Failed to create tar.gz file"
             exit 1
           fi
           echo "Tar file created: $ZIP_FILENAME"
-          # Export for next step
           echo "ZIP_FILENAME=$ZIP_FILENAME" >> "$GITHUB_ENV"
 
-      - name: Upload TiUP Visualizer Package
+      - name: Upload TiUP Visualizer Artifact
         uses: actions/upload-artifact@v4
         with:
           name: tiup-visualizer-package
@@ -58,3 +66,12 @@ jobs:
           retention-days: 30
           compression-level: 6
           overwrite: true
+
+      - name: Publish to GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ZIP_FILENAME }}
+          name: TiUP Visualizer ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
