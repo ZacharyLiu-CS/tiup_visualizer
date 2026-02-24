@@ -5,6 +5,9 @@ on:
   mr: ["*"]
 
 
+variables:
+  f_name: "tiup-visualizer.tar.gz"
+
 stages:
   - name: "TiUP Visualizer CI Flow"
     jobs:
@@ -61,6 +64,7 @@ stages:
               NC='\033[0m'
               TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
               ZIP_FILENAME="tiup-visualizer-${TIMESTAMP}.tar.gz"
+              echo "::set-variable name=f_name::${ZIP_FILENAME}"
 
               # Create zip file
               echo -e "${YELLOW}Compressing build directory...${NC}"
@@ -97,7 +101,7 @@ stages:
               git_private_token: ${{ci.token}}
               ld_selectop: "upload_one_attachment"
               ld_input_branch: "release_v1.0.${{ ci.build_num }}"
-              ld_input_upload_file_name: "tiup-visualizer/*.tar.gz"
+              ld_input_upload_file_name: "tiup-visualizer/${{ variables.f_name }}"
           - name: Clean Data
             run: |
               rm -rf tiup-visualizer
