@@ -1,0 +1,60 @@
+name: TiUP Visualizer CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: ["*"]
+
+jobs:
+  build:
+    name: TiUP Visualizer CI
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.10"
+          cache-dependency-path: backend-go/go.sum
+
+      - name: Install Dependencies
+        run: sudo apt-get update && sudo apt-get install -y git-lfs make
+
+      - name: Build TiUP Visualizer Project
+        run: make build
+
+      - name: Pack TiUP Visualizer Package
+        run: |
+          TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+          ZIP_FILENAME="tiup-visualizer-${TIMESTAMP}.tar.gz"
+          tar -czf "$ZIP_FILENAME" --transform 's/^build/tiup-visualizer/' build
+          if [ ! -f "$ZIP_FILENAME" ]; then
+            echo "Error: Failed to create tar.gz file"
+            exit 1
+          fi
+          echo "Tar file created: $ZIP_FILENAME"
+          # Export for next step
+          echo "ZIP_FILENAME=$ZIP_FILENAME" >> "$GITHUB_ENV"
+
+      - name: Upload TiUP Visualizer Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: tiup-visualizer-package
+          path: "*.tar.gz"
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 6
+          overwrite: true
