@@ -91,7 +91,7 @@
                               class="log-btn log-btn-ai"
                               :class="{ 'log-btn-ai-copied': aiCopyStatus[`${component.id}-${logFile.filename}`] === 'copied' }"
                               @click="aiAnalysis(component, logFile.filename)"
-                              :title="aiCopyStatus[`${component.id}-${logFile.filename}`] === 'copied' ? 'Prompt copied! Paste it in Yuanbao' : 'Copy prompt + Download log + Open Yuanbao'"
+                              :title="aiCopyStatus[`${component.id}-${logFile.filename}`] === 'copied' ? 'Prompt copied! Paste it in Knot AI' : 'Copy prompt + Download log + Open Knot AI'"
                             >{{ aiCopyStatus[`${component.id}-${logFile.filename}`] === 'copied' ? 'Copied!' : 'AI Analysis' }}</button>
                           </div>
                         </div>

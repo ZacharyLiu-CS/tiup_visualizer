@@ -17,7 +17,21 @@ TiUP Visualizer provides an intuitive web interface to visualize and manage your
 - 🔗 Connection visualization between hosts and clusters
 - 📊 Detailed component information (IP, ports, status, directories)
 - 🔄 Real-time data from TiUP commands
+- 🤖 AI Analysis powered by [Knot](https://knot.woa.com) — one-click log analysis with AI
 - 🎨 Modern, responsive UI with Vue 3
+
+## 🤖 AI Analysis
+
+AI 分析功能基于 **Knot** 平台实现，支持一键复制集群日志分析提示词并跳转到 Knot AI 对话界面进行智能分析。
+
+- **首页 AI Analysis 按钮**：直接打开 Knot AI 对话页面
+- **详情页 AI Analysis 按钮**：自动复制包含集群信息的分析提示词到剪贴板，并下载日志尾部数据，然后打开 Knot AI 对话页面，粘贴提示词即可开始分析
+
+### Knot 搭建教程
+
+如需自行搭建或配置 Knot AI 工作区，请参考内部教程：
+
+👉 **[Knot 搭建指南](https://iwiki.woa.com/p/4018690792)**
 
 ## 🚀 Quick Start
 
