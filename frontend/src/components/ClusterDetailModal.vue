@@ -431,8 +431,8 @@ export default {
 }
 
 .path-cell {
-  max-width: 280px;
-  min-width: 150px;
+  max-width: 140px;
+  min-width: 80px;
 }
 
 .path-scroll {
@@ -442,7 +442,7 @@ export default {
   white-space: nowrap;
   overflow-x: auto;
   overflow-y: hidden;
-  max-width: 280px;
+  max-width: 140px;
   padding-bottom: 4px;
 }
 
