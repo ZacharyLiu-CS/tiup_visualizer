@@ -65,4 +65,33 @@ export const serverLogAPI = {
   },
 }
 
+export const tikvAPI = {
+  getKey: (clusterName, key, options = {}) => {
+    const params = { key, ...options }
+    if (!params['parse-type']) params['parse-type'] = 'graph_meta'
+    if (!params.cf) params.cf = 'default'
+    return api.get(`/tikv/${encodeURIComponent(clusterName)}/key`, { params })
+  },
+  scanPrefix: (clusterName, prefix, options = {}) => {
+    const params = { prefix, ...options }
+    if (!params['parse-type']) params['parse-type'] = 'graph_meta'
+    if (!params.cf) params.cf = 'default'
+    if (options.limit) params.limit = options.limit
+    return api.get(`/tikv/${encodeURIComponent(clusterName)}/scan`, { params })
+  },
+  directGetKey: (pd, key, options = {}) => {
+    const params = { pd, key, ...options }
+    if (!params['parse-type']) params['parse-type'] = 'graph_meta'
+    if (!params.cf) params.cf = 'default'
+    return api.get('/tikv-direct/key', { params })
+  },
+  directScanPrefix: (pd, prefix, options = {}) => {
+    const params = { pd, prefix, ...options }
+    if (!params['parse-type']) params['parse-type'] = 'graph_meta'
+    if (!params.cf) params.cf = 'default'
+    if (options.limit) params.limit = options.limit
+    return api.get('/tikv-direct/scan', { params })
+  },
+}
+
 export default api

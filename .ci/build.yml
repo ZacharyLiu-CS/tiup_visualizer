@@ -114,7 +114,7 @@ stages:
               echo "Uploading $FILE_PATH to Tencent Mirrors ..."
               curl --request PUT \
                 -u "${{ settings.tiup_publish_key.username }}:${{ settings.tiup_publish_key.password }}" \
-                --url "https://mirrors.tencent.com/repository/generic/easygraph-tiup-visualizer/${{ variables.f_name }}/" \
+                --url "https://mirrors.tencent.com/repository/generic/easygraph-tiup-visualizer/" \
                 --upload-file "$FILE_PATH"
               echo "Upload completed successfully."
           - name: Clean Data

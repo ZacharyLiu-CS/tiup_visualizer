@@ -16,8 +16,8 @@ PROJECT_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 BUILD_DIR="$PROJECT_ROOT/build"
 
 # Upload configuration
-USERNAME="xxxx"
-TOKEN="xxxxx"
+USERNAME="zacharyzliu"
+TOKEN="ca709e04679611f0b2495254002e0cf4"
 REPO="easygraph-tiup-visualizer"
 
 # Check if build directory exists

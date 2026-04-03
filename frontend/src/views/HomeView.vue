@@ -53,6 +53,13 @@
             </svg>
             AI Analysis
         </button>
+        <button class="header-btn" @click="openGraphTools" title="Open Graph Tools">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+            <circle cx="5" cy="12" r="2" /><circle cx="19" cy="5" r="2" /><circle cx="19" cy="19" r="2" />
+            <line x1="7" y1="11" x2="17" y2="6" /><line x1="7" y1="13" x2="17" y2="18" />
+          </svg>
+          Graph Tools
+        </button>
         <button v-if="selectedHost || selectedCluster" @click="clearSelection" class="header-btn">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
             <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
@@ -80,6 +87,9 @@
 
     <!-- Server Log Modal -->
     <ServerLogModal :visible="showServerLogs" @close="showServerLogs = false" />
+
+    <!-- Graph Tools Panel -->
+    <GraphToolsPanel :visible="showGraphTools" @close="showGraphTools = false" />
 
     <div class="loading-overlay" v-if="loading">
       <div class="spinner"></div>
@@ -153,6 +163,7 @@ import ClusterDetailModal from '../components/ClusterDetailModal.vue'
 import ConnectionLines from '../components/ConnectionLines.vue'
 import WebTerminal from '../components/WebTerminal.vue'
 import ServerLogModal from '../components/ServerLogModal.vue'
+import GraphToolsPanel from '../components/GraphToolsPanel.vue'
 
 export default {
   name: 'HomeView',
@@ -162,7 +173,8 @@ export default {
     ClusterDetailModal,
     ConnectionLines,
     WebTerminal,
-    ServerLogModal
+    ServerLogModal,
+    GraphToolsPanel
   },
   props: {
     username: {
@@ -186,7 +198,8 @@ export default {
         { value: 'left', label: 'Left' },
         { value: 'float', label: 'Float' }
       ],
-      showServerLogs: false
+      showServerLogs: false,
+      showGraphTools: false
     }
   },
   computed: {
@@ -288,6 +301,9 @@ export default {
     },
     openAIPanel() {
       window.open('https://knot.woa.com/chat?web_key=4a8f043b1b9b41239557aa8c6e8dfe84&workspace_id=a5f9086a466f44428c95c443bb576484', '_blank')
+    },
+    openGraphTools() {
+      this.showGraphTools = true
     },
     openAIAnalysisPanel() {
       window.open('https://knot.woa.com/chat?web_key=4a8f043b1b9b41239557aa8c6e8dfe84&workspace_id=a5f9086a466f44428c95c443bb576484', '_blank')

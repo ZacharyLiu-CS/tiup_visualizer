@@ -19,6 +19,7 @@ type Server struct {
 	cfg         *AppConfig
 	auth        *AuthService
 	tiup        *TiUPService
+	tikv        *TiKVService
 	execDir     string
 	mux         *http.ServeMux
 }
@@ -28,6 +29,7 @@ func NewServer(cfg *AppConfig, execDir string) *Server {
 		cfg:     cfg,
 		auth:    NewAuthService(cfg),
 		tiup:    NewTiUPService(),
+		tikv:    NewTiKVService(),
 		execDir: execDir,
 		mux:     http.NewServeMux(),
 	}
@@ -58,6 +60,13 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET "+prefix+"/logs/{clusterName}/{componentID}/{filename}", s.requireAuth(s.handleLogFile))
 	s.mux.HandleFunc("GET "+prefix+"/server-logs", s.requireAuth(s.handleServerLogs))
 	s.mux.HandleFunc("GET "+prefix+"/server-logs/{filename}", s.requireAuth(s.handleServerLogFile))
+
+	// TiKV data access routes (auth required)
+	s.mux.HandleFunc("GET "+prefix+"/tikv/{clusterName}/key", s.requireAuth(s.handleTiKVGetKey))
+	s.mux.HandleFunc("GET "+prefix+"/tikv/{clusterName}/scan", s.requireAuth(s.handleTiKVScan))
+	// TiKV direct PD address routes (auth required)
+	s.mux.HandleFunc("GET "+prefix+"/tikv-direct/key", s.requireAuth(s.handleTiKVDirectGetKey))
+	s.mux.HandleFunc("GET "+prefix+"/tikv-direct/scan", s.requireAuth(s.handleTiKVDirectScan))
 
 	// WebSocket terminal (GET only, must be before catch-all)
 	s.mux.HandleFunc("GET /ws/terminal", s.handleTerminal)
@@ -429,4 +438,161 @@ func writeError(w http.ResponseWriter, status int, detail string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(ErrorResponse{Detail: detail})
+}
+
+// --- TiKV Data Access ---
+
+func (s *Server) handleTiKVGetKey(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("clusterName")
+	key := r.URL.Query().Get("key")
+	parseType := r.URL.Query().Get("parse-type")
+	cf := r.URL.Query().Get("cf")
+
+	if key == "" {
+		writeError(w, http.StatusBadRequest, "missing required query parameter: key")
+		return
+	}
+	if parseType == "" {
+		parseType = "graph_meta"
+	}
+	if cf == "" {
+		cf = "default"
+	}
+
+	// Get PD addresses from cluster detail
+	pdAddrs, err := s.getClusterPDAddrs(clusterName)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	result, err := s.tikv.GetKey(pdAddrs, cf, key, parseType)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleTiKVScan(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("clusterName")
+	prefix := r.URL.Query().Get("prefix")
+	parseType := r.URL.Query().Get("parse-type")
+	cf := r.URL.Query().Get("cf")
+	limit := 0
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if v, err := strconv.Atoi(l); err == nil && v > 0 {
+			limit = v
+		}
+	}
+
+	if prefix == "" {
+		writeError(w, http.StatusBadRequest, "missing required query parameter: prefix")
+		return
+	}
+	if parseType == "" {
+		parseType = "graph_meta"
+	}
+	if cf == "" {
+		cf = "default"
+	}
+
+	// Get PD addresses from cluster detail
+	pdAddrs, err := s.getClusterPDAddrs(clusterName)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	results, err := s.tikv.ScanPrefix(pdAddrs, cf, prefix, limit, parseType)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"total":   len(results),
+		"entries": results,
+	})
+}
+
+// getClusterPDAddrs extracts PD addresses from cluster components.
+func (s *Server) getClusterPDAddrs(clusterName string) (string, error) {
+	detail, err := s.tiup.GetClusterDetail(clusterName)
+	if err != nil {
+		return "", fmt.Errorf("failed to get cluster %q detail: %w", clusterName, err)
+	}
+	pdAddrs := ExtractPDAddrs(detail)
+	if pdAddrs == "" {
+		return "", fmt.Errorf("no PD component found in cluster %q", clusterName)
+	}
+	return pdAddrs, nil
+}
+
+// --- TiKV Direct (custom PD address) ---
+
+func (s *Server) handleTiKVDirectGetKey(w http.ResponseWriter, r *http.Request) {
+	pd := r.URL.Query().Get("pd")
+	key := r.URL.Query().Get("key")
+	parseType := r.URL.Query().Get("parse-type")
+	cf := r.URL.Query().Get("cf")
+
+	if pd == "" {
+		writeError(w, http.StatusBadRequest, "missing required query parameter: pd")
+		return
+	}
+	if key == "" {
+		writeError(w, http.StatusBadRequest, "missing required query parameter: key")
+		return
+	}
+	if parseType == "" {
+		parseType = "graph_meta"
+	}
+	if cf == "" {
+		cf = "default"
+	}
+
+	result, err := s.tikv.GetKey(pd, cf, key, parseType)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleTiKVDirectScan(w http.ResponseWriter, r *http.Request) {
+	pd := r.URL.Query().Get("pd")
+	prefix := r.URL.Query().Get("prefix")
+	parseType := r.URL.Query().Get("parse-type")
+	cf := r.URL.Query().Get("cf")
+	limit := 0
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if v, err := strconv.Atoi(l); err == nil && v > 0 {
+			limit = v
+		}
+	}
+
+	if pd == "" {
+		writeError(w, http.StatusBadRequest, "missing required query parameter: pd")
+		return
+	}
+	if prefix == "" {
+		writeError(w, http.StatusBadRequest, "missing required query parameter: prefix")
+		return
+	}
+	if parseType == "" {
+		parseType = "graph_meta"
+	}
+	if cf == "" {
+		cf = "default"
+	}
+
+	results, err := s.tikv.ScanPrefix(pd, cf, prefix, limit, parseType)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"total":   len(results),
+		"entries": results,
+	})
 }
