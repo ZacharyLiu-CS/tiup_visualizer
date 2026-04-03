@@ -193,13 +193,25 @@ func (u *UpdateService) DownloadAndApply(release *LatestRelease) error {
 			"error", err,
 			"elapsed", time.Since(deployStart).Round(time.Millisecond),
 		)
+		cleanupTmpDir(tmpDir)
 		return fmt.Errorf("deploy failed: %w\n%s", err, out)
 	}
 	slog.Info("[update] ===== Update completed successfully =====",
 		"version", release.Version,
 		"elapsed", time.Since(deployStart).Round(time.Millisecond),
 	)
+	cleanupTmpDir(tmpDir)
 	return nil
+}
+
+// cleanupTmpDir removes the entire update temp directory and logs the result.
+func cleanupTmpDir(tmpDir string) {
+	slog.Info("[update] Cleaning up temp directory", "path", tmpDir)
+	if err := os.RemoveAll(tmpDir); err != nil {
+		slog.Warn("[update] Failed to remove temp directory", "path", tmpDir, "error", err)
+	} else {
+		slog.Info("[update] Temp directory removed", "path", tmpDir)
+	}
 }
 
 // buildDeployArgs reads config to pass the same port/prefix to the new deploy.
