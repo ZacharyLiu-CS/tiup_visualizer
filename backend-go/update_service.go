@@ -43,21 +43,26 @@ type CheckResult struct {
 
 // FetchLatestRelease queries the mirror index page and returns the latest package.
 func (u *UpdateService) FetchLatestRelease() (*LatestRelease, error) {
+	slog.Info("[update] Fetching release list", "url", mirrorBaseURL)
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Get(mirrorBaseURL)
 	if err != nil {
+		slog.Error("[update] Failed to fetch release list", "error", err)
 		return nil, fmt.Errorf("failed to fetch release list: %w", err)
 	}
 	defer resp.Body.Close()
+	slog.Info("[update] Release list response", "status", resp.StatusCode)
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		slog.Error("[update] Failed to read release list body", "error", err)
 		return nil, fmt.Errorf("failed to read release list: %w", err)
 	}
 
 	re := regexp.MustCompile(versionPattern)
 	matches := re.FindAllStringSubmatch(string(body), -1)
 	if len(matches) == 0 {
+		slog.Error("[update] No release packages found in response", "body_preview", truncate(string(body), 200))
 		return nil, fmt.Errorf("no release packages found at %s", mirrorBaseURL)
 	}
 
@@ -71,9 +76,11 @@ func (u *UpdateService) FetchLatestRelease() (*LatestRelease, error) {
 		}
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(versions)))
+	slog.Info("[update] Available versions", "count", len(versions), "versions", strings.Join(versions, ", "))
 
 	latest := versions[0]
 	filename := fmt.Sprintf("tiup-visualizer-%s.tar.gz", latest)
+	slog.Info("[update] Latest release identified", "version", latest, "filename", filename)
 	return &LatestRelease{
 		Version:  latest,
 		Filename: filename,
@@ -83,86 +90,141 @@ func (u *UpdateService) FetchLatestRelease() (*LatestRelease, error) {
 
 // DownloadAndApply downloads the latest package to /tmp, extracts it, and runs deploy-nginx.sh.
 func (u *UpdateService) DownloadAndApply(release *LatestRelease) error {
+	slog.Info("[update] ===== Update process started =====", "target_version", release.Version)
+
+	// Step 1: prepare temp dir
 	tmpDir := filepath.Join("/tmp", "tiup-visualizer-update")
-	os.RemoveAll(tmpDir)
+	slog.Info("[update] Step 1/5: Preparing temp directory", "path", tmpDir)
+	if err := os.RemoveAll(tmpDir); err != nil {
+		slog.Warn("[update] Failed to remove old temp dir (non-fatal)", "error", err)
+	}
 	if err := os.MkdirAll(tmpDir, 0755); err != nil {
+		slog.Error("[update] Failed to create temp directory", "path", tmpDir, "error", err)
 		return fmt.Errorf("failed to create temp dir: %w", err)
 	}
+	slog.Info("[update] Temp directory ready", "path", tmpDir)
 
+	// Step 2: download
 	archivePath := filepath.Join(tmpDir, release.Filename)
-
-	// Download
-	slog.Info("Downloading update", "url", release.URL, "dest", archivePath)
+	slog.Info("[update] Step 2/5: Downloading package", "url", release.URL, "dest", archivePath)
+	startTime := time.Now()
 	if err := downloadFile(release.URL, archivePath); err != nil {
+		slog.Error("[update] Download failed", "url", release.URL, "error", err)
 		return fmt.Errorf("download failed: %w", err)
 	}
-
-	// Extract
-	slog.Info("Extracting archive", "path", archivePath)
-	out, err := ExecuteCommand(
-		fmt.Sprintf("tar -xzf %s -C %s", archivePath, tmpDir),
-		5*time.Minute,
+	fi, _ := os.Stat(archivePath)
+	var fileSize int64
+	if fi != nil {
+		fileSize = fi.Size()
+	}
+	slog.Info("[update] Download completed",
+		"dest", archivePath,
+		"size_bytes", fileSize,
+		"elapsed", time.Since(startTime).Round(time.Millisecond),
 	)
+
+	// Step 3: extract
+	slog.Info("[update] Step 3/5: Extracting archive", "archive", archivePath, "dest", tmpDir)
+	extractCmd := fmt.Sprintf("tar -xzf %s -C %s", archivePath, tmpDir)
+	slog.Info("[update] Running command", "cmd", extractCmd)
+	out, err := ExecuteCommand(extractCmd, 5*time.Minute)
+	if out != "" {
+		slog.Info("[update] tar output", "output", out)
+	}
 	if err != nil {
+		slog.Error("[update] Extract failed", "error", err, "output", out)
 		return fmt.Errorf("extract failed: %w\n%s", err, out)
 	}
+	slog.Info("[update] Archive extracted successfully")
 
-	// Find extracted directory (tiup-visualizer/)
+	// Verify extracted directory
 	extractedDir := filepath.Join(tmpDir, "tiup-visualizer")
 	if _, err := os.Stat(extractedDir); err != nil {
+		slog.Error("[update] Extracted directory not found", "expected_path", extractedDir, "error", err)
 		return fmt.Errorf("extracted directory not found at %s", extractedDir)
 	}
+	slog.Info("[update] Extracted directory verified", "path", extractedDir)
 
-	// Copy version file into extracted dir so deploy can reference it
+	// Copy version file
 	versionSrc := filepath.Join(u.execDir, "version")
+	slog.Info("[update] Step 4/5: Preparing deploy", "copying_version_from", versionSrc)
 	if data, err := os.ReadFile(versionSrc); err == nil {
-		_ = os.WriteFile(filepath.Join(extractedDir, "version"), data, 0644)
+		destVersion := filepath.Join(extractedDir, "version")
+		if werr := os.WriteFile(destVersion, data, 0644); werr != nil {
+			slog.Warn("[update] Failed to copy version file (non-fatal)", "error", werr)
+		} else {
+			slog.Info("[update] Version file copied", "dest", destVersion, "content", strings.TrimSpace(string(data)))
+		}
+	} else {
+		slog.Warn("[update] Could not read source version file (non-fatal)", "path", versionSrc, "error", err)
 	}
 
-	// Run deploy-nginx.sh (non-interactive, preserve existing flags)
+	// Verify deploy script exists
 	deployScript := filepath.Join(extractedDir, "deploy-nginx.sh")
 	if _, err := os.Stat(deployScript); err != nil {
+		slog.Error("[update] deploy-nginx.sh not found in package", "expected_path", deployScript)
 		return fmt.Errorf("deploy-nginx.sh not found in package")
 	}
 	if err := os.Chmod(deployScript, 0755); err != nil {
+		slog.Error("[update] chmod deploy-nginx.sh failed", "error", err)
 		return fmt.Errorf("chmod deploy-nginx.sh failed: %w", err)
 	}
 
-	// Read current config to preserve port/prefix
+	// Step 5: deploy
 	deployArgs := u.buildDeployArgs()
-	cmd := fmt.Sprintf("cd %s && bash deploy-nginx.sh %s", extractedDir, deployArgs)
-	slog.Info("Running deploy script", "cmd", cmd)
+	cmd := fmt.Sprintf("cd %s && bash deploy-nginx.sh %s 2>&1", extractedDir, deployArgs)
+	slog.Info("[update] Step 5/5: Running deploy script", "cmd", cmd, "deploy_args", deployArgs)
+	deployStart := time.Now()
 	out, err = ExecuteCommand(cmd, 5*time.Minute)
+	// Log deploy output line by line for readability
+	if out != "" {
+		for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+			if line != "" {
+				slog.Info("[update][deploy] " + line)
+			}
+		}
+	}
 	if err != nil {
+		slog.Error("[update] Deploy script failed",
+			"error", err,
+			"elapsed", time.Since(deployStart).Round(time.Millisecond),
+		)
 		return fmt.Errorf("deploy failed: %w\n%s", err, out)
 	}
-	slog.Info("Deploy completed", "output", out)
+	slog.Info("[update] ===== Update completed successfully =====",
+		"version", release.Version,
+		"elapsed", time.Since(deployStart).Round(time.Millisecond),
+	)
 	return nil
 }
 
 // buildDeployArgs reads config to pass the same port/prefix to the new deploy.
 func (u *UpdateService) buildDeployArgs() string {
 	args := []string{}
-	// Try to read running config
 	cfgPath := filepath.Join(u.execDir, "config.yaml")
-	if data, err := os.ReadFile(cfgPath); err == nil {
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "root_path:") {
-				val := strings.TrimSpace(strings.TrimPrefix(line, "root_path:"))
-				val = strings.Trim(val, `"'`)
-				if val != "" {
-					args = append(args, "--prefix", val)
-				}
+	slog.Info("[update] Reading config for deploy args", "path", cfgPath)
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		slog.Warn("[update] Could not read config.yaml, using deploy defaults", "error", err)
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "root_path:") {
+			val := strings.TrimSpace(strings.TrimPrefix(line, "root_path:"))
+			val = strings.Trim(val, `"'`)
+			if val != "" {
+				args = append(args, "--prefix", val)
+				slog.Info("[update] Deploy arg: prefix", "value", val)
 			}
-			if strings.HasPrefix(line, "listen_addr:") {
-				val := strings.TrimSpace(strings.TrimPrefix(line, "listen_addr:"))
-				val = strings.Trim(val, `"'`)
-				// Extract port from "host:port"
-				parts := strings.Split(val, ":")
-				if len(parts) == 2 && parts[1] != "" {
-					args = append(args, "--port", parts[1])
-				}
+		}
+		if strings.HasPrefix(line, "listen_addr:") {
+			val := strings.TrimSpace(strings.TrimPrefix(line, "listen_addr:"))
+			val = strings.Trim(val, `"'`)
+			parts := strings.Split(val, ":")
+			if len(parts) == 2 && parts[1] != "" {
+				args = append(args, "--port", parts[1])
+				slog.Info("[update] Deploy arg: port", "value", parts[1])
 			}
 		}
 	}
@@ -187,3 +249,12 @@ func downloadFile(url, dest string) error {
 	_, err = io.Copy(f, resp.Body)
 	return err
 }
+
+// truncate truncates a string to max n chars for log preview.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
