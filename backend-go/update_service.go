@@ -228,8 +228,17 @@ exit $EXIT_CODE
 	var launchCmd string
 	switch {
 	case cmdExists("systemd-run"):
+		// Detect support for --no-ask-password (available in systemd >= 230).
+		// Dev environment (zacharyzliu): needs it for passwordless sudo.
+		// IDC environment (root, older systemd): does not support this flag.
+		useNoAsk := supportsSystemdRunFlag("--no-ask-password")
+		baseCmd := "sudo systemd-run"
+		if useNoAsk {
+			baseCmd += " --no-ask-password"
+		}
 		launchCmd = fmt.Sprintf(
-			"sudo systemd-run --no-ask-password --unit=tiup-visualizer-update --description='TiUP Visualizer self-update' bash %s",
+			"%s --unit=tiup-visualizer-update --description='TiUP Visualizer self-update' bash %s",
+			baseCmd,
 			runnerScript,
 		)
 	case cmdExists("at"):
@@ -259,6 +268,16 @@ exit $EXIT_CODE
 func cmdExists(cmd string) bool {
 	out, err := ExecuteCommand("command -v "+cmd, 3*time.Second)
 	return err == nil && len(out) > 0
+}
+
+// supportsSystemdRunFlag checks whether systemd-run accepts the given flag.
+// This handles version differences across environments (e.g., older systemd on IDC).
+func supportsSystemdRunFlag(flag string) bool {
+	out, err := ExecuteCommand("systemd-run --help", 5*time.Second)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(out, flag)
 }
 
 // cleanupTmpDir removes the entire update temp directory and logs the result.
