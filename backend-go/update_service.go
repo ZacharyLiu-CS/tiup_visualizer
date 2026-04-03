@@ -149,18 +149,14 @@ func (u *UpdateService) DownloadAndApply(release *LatestRelease) error {
 	}
 	slog.Info("[update] Extracted directory verified", "path", extractedDir)
 
-	// Copy version file
-	versionSrc := filepath.Join(u.execDir, "version")
-	slog.Info("[update] Step 4/5: Preparing deploy", "copying_version_from", versionSrc)
-	if data, err := os.ReadFile(versionSrc); err == nil {
-		destVersion := filepath.Join(extractedDir, "version")
-		if werr := os.WriteFile(destVersion, data, 0644); werr != nil {
-			slog.Warn("[update] Failed to copy version file (non-fatal)", "error", werr)
-		} else {
-			slog.Info("[update] Version file copied", "dest", destVersion, "content", strings.TrimSpace(string(data)))
-		}
+	// Verify version in the new package
+	newVersionPath := filepath.Join(extractedDir, "version")
+	if data, err := os.ReadFile(newVersionPath); err == nil {
+		slog.Info("[update] Step 4/5: New package version", "version", strings.TrimSpace(string(data)))
 	} else {
-		slog.Warn("[update] Could not read source version file (non-fatal)", "path", versionSrc, "error", err)
+		// Package has no version file — write the target version so deploy installs it
+		slog.Warn("[update] Step 4/5: version file not found in package, writing target version")
+		_ = os.WriteFile(newVersionPath, []byte(release.Version+"\n"), 0644)
 	}
 
 	// Verify deploy script exists
@@ -174,35 +170,95 @@ func (u *UpdateService) DownloadAndApply(release *LatestRelease) error {
 		return fmt.Errorf("chmod deploy-nginx.sh failed: %w", err)
 	}
 
-	// Step 5: deploy
+	// Step 5: launch deploy via detached runner script
+	// We MUST NOT call deploy-nginx.sh directly in this process because it will
+	// restart the systemd service (killing us mid-execution).
+	// Instead, write a standalone runner shell script and launch it with setsid/nohup
+	// so it runs in a completely separate process group and survives our exit.
 	deployArgs := u.buildDeployArgs()
-	cmd := fmt.Sprintf("cd %s && bash deploy-nginx.sh %s", extractedDir, deployArgs)
-	slog.Info("[update] Step 5/5: Running deploy script", "cmd", cmd, "deploy_args", deployArgs)
-	deployStart := time.Now()
-	out, err = ExecuteCommand(cmd, 5*time.Minute)
-	// Log deploy output line by line for readability
-	if out != "" {
-		for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
-			if line != "" {
-				slog.Info("[update][deploy] " + line)
-			}
-		}
+	logFile := filepath.Join(u.execDir, "logs", "tiup-visualizer.log")
+	runnerScript := filepath.Join(tmpDir, "run-deploy.sh")
+	runnerContent := fmt.Sprintf(`#!/bin/bash
+# Auto-generated update runner — do not edit
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+DEPLOY_DIR=%s
+DEPLOY_ARGS=%q
+LOG_FILE=%s
+TMPDIR=%s
+
+log() { echo "[$(date '+%%Y-%%m-%%dT%%H:%%M:%%S')] [update-runner] $*" | tee -a "$LOG_FILE"; }
+
+log "===== Runner started (pid=$$) ====="
+log "Deploy dir: $DEPLOY_DIR"
+log "Deploy args: $DEPLOY_ARGS"
+
+cd "$DEPLOY_DIR" || { log "ERROR: cannot cd to $DEPLOY_DIR"; exit 1; }
+
+log "Running deploy-nginx.sh ..."
+bash deploy-nginx.sh $DEPLOY_ARGS >> "$LOG_FILE" 2>&1
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -eq 0 ]; then
+    log "===== Deploy completed successfully ====="
+else
+    log "ERROR: deploy-nginx.sh exited with code $EXIT_CODE"
+fi
+
+log "Cleaning up temp directory: $TMPDIR"
+rm -rf "$TMPDIR"
+log "Done."
+exit $EXIT_CODE
+`, extractedDir, deployArgs, logFile, tmpDir)
+
+	if err := os.WriteFile(runnerScript, []byte(runnerContent), 0755); err != nil {
+		slog.Error("[update] Failed to write runner script", "path", runnerScript, "error", err)
+		return fmt.Errorf("failed to write runner script: %w", err)
 	}
-	if err != nil {
-		slog.Error("[update] Deploy script failed",
-			"error", err,
-			"output", out,
-			"elapsed", time.Since(deployStart).Round(time.Millisecond),
-		)
-		cleanupTmpDir(tmpDir)
-		return fmt.Errorf("deploy failed: %w\n%s", err, out)
-	}
-	slog.Info("[update] ===== Update completed successfully =====",
-		"version", release.Version,
-		"elapsed", time.Since(deployStart).Round(time.Millisecond),
+	slog.Info("[update] Step 5/5: Launching detached deploy runner",
+		"runner", runnerScript,
+		"deploy_args", deployArgs,
+		"log", logFile,
 	)
-	cleanupTmpDir(tmpDir)
+
+	// systemd stop kills the entire service cgroup, so we need the runner in its own cgroup.
+	// Strategy (in order of preference):
+	//   1. systemd-run with sudo (separate transient unit, separate cgroup)
+	//   2. at(1) via atd daemon (completely independent scheduler)
+	//   3. double-fork via sh -c so child is reparented to init/PID1
+	var launchCmd string
+	switch {
+	case cmdExists("systemd-run"):
+		launchCmd = fmt.Sprintf(
+			"sudo systemd-run --no-ask-password --unit=tiup-visualizer-update --description='TiUP Visualizer self-update' bash %s",
+			runnerScript,
+		)
+	case cmdExists("at"):
+		launchCmd = fmt.Sprintf("echo 'bash %s' | at now", runnerScript)
+	default:
+		// Double-fork: sh spawns a subshell that spawns the runner and exits,
+		// leaving the runner reparented to init (PID 1), outside our cgroup.
+		launchCmd = fmt.Sprintf(
+			`sh -c 'bash %s </dev/null >/dev/null 2>&1 & disown $!'`,
+			runnerScript,
+		)
+	}
+	slog.Info("[update] Launch command", "cmd", launchCmd)
+	if out, err := ExecuteCommand(launchCmd, 10*time.Second); err != nil {
+		slog.Error("[update] Failed to launch runner", "error", err, "output", out)
+		return fmt.Errorf("failed to launch deploy runner: %w", err)
+	}
+
+	slog.Info("[update] Deploy runner launched — service will restart shortly",
+		"version", release.Version,
+	)
+	// tmpDir cleanup is handled by the runner script itself after deploy completes
 	return nil
+}
+
+// cmdExists reports whether a command is available in PATH.
+func cmdExists(cmd string) bool {
+	out, err := ExecuteCommand("command -v "+cmd, 3*time.Second)
+	return err == nil && len(out) > 0
 }
 
 // cleanupTmpDir removes the entire update temp directory and logs the result.
@@ -215,7 +271,7 @@ func cleanupTmpDir(tmpDir string) {
 	}
 }
 
-// buildDeployArgs reads config to pass the same port/prefix to the new deploy.
+// buildDeployArgs reads config to pass the same port/prefix/user to the new deploy.
 func (u *UpdateService) buildDeployArgs() string {
 	args := []string{}
 	cfgPath := filepath.Join(u.execDir, "config.yaml")
@@ -223,29 +279,51 @@ func (u *UpdateService) buildDeployArgs() string {
 	data, err := os.ReadFile(cfgPath)
 	if err != nil {
 		slog.Warn("[update] Could not read config.yaml, using deploy defaults", "error", err)
-		return ""
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "root_path:") {
-			val := strings.TrimSpace(strings.TrimPrefix(line, "root_path:"))
-			val = strings.Trim(val, `"'`)
-			if val != "" {
-				args = append(args, "--prefix", val)
-				slog.Info("[update] Deploy arg: prefix", "value", val)
+	} else {
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "root_path:") {
+				val := strings.TrimSpace(strings.TrimPrefix(line, "root_path:"))
+				val = strings.Trim(val, `"'`)
+				if val != "" {
+					args = append(args, "--prefix", val)
+					slog.Info("[update] Deploy arg: prefix", "value", val)
+				}
+			}
+			if strings.HasPrefix(line, "listen_addr:") {
+				val := strings.TrimSpace(strings.TrimPrefix(line, "listen_addr:"))
+				val = strings.Trim(val, `"'`)
+				parts := strings.Split(val, ":")
+				if len(parts) == 2 && parts[1] != "" {
+					args = append(args, "--port", parts[1])
+					slog.Info("[update] Deploy arg: port", "value", parts[1])
+				}
 			}
 		}
-		if strings.HasPrefix(line, "listen_addr:") {
-			val := strings.TrimSpace(strings.TrimPrefix(line, "listen_addr:"))
-			val = strings.Trim(val, `"'`)
-			parts := strings.Split(val, ":")
-			if len(parts) == 2 && parts[1] != "" {
-				args = append(args, "--port", parts[1])
-				slog.Info("[update] Deploy arg: port", "value", parts[1])
-			}
-		}
 	}
+
+	// Detect service user from systemd unit or current process owner
+	serviceUser := u.detectServiceUser()
+	if serviceUser != "" && serviceUser != "root" {
+		args = append(args, "--user", serviceUser)
+		slog.Info("[update] Deploy arg: user", "value", serviceUser)
+	}
+
 	return strings.Join(args, " ")
+}
+
+// detectServiceUser returns the User= configured in the systemd unit, or the current process owner.
+func (u *UpdateService) detectServiceUser() string {
+	// Try reading from systemd unit
+	out, err := ExecuteCommand("systemctl show tiup-visualizer --property=User --value 2>/dev/null", 5*time.Second)
+	if err == nil {
+		user := strings.TrimSpace(out)
+		if user != "" && user != "(null)" {
+			return user
+		}
+	}
+	// Fallback: current process owner
+	return os.Getenv("USER")
 }
 
 func downloadFile(url, dest string) error {
