@@ -72,6 +72,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET "+prefix+"/logs/{clusterName}/{componentID}/{filename}", s.requireAuth(s.handleLogFile))
 	s.mux.HandleFunc("GET "+prefix+"/server-logs", s.requireAuth(s.handleServerLogs))
 	s.mux.HandleFunc("GET "+prefix+"/server-logs/{filename}", s.requireAuth(s.handleServerLogFile))
+	s.mux.HandleFunc("DELETE "+prefix+"/server-logs/{filename}", s.requireAuth(s.handleServerLogClean))
 
 	// TiKV data access routes (auth required)
 	s.mux.HandleFunc("GET "+prefix+"/tikv/{clusterName}/key", s.requireAuth(s.handleTiKVGetKey))
@@ -413,6 +414,31 @@ func (s *Server) handleServerLogFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	serveLocalFile(w, logPath, filename, action)
+}
+
+func (s *Server) handleServerLogClean(w http.ResponseWriter, r *http.Request) {
+	filename := r.PathValue("filename")
+
+	if strings.Contains(filename, "..") || strings.Contains(filename, "/") || strings.Contains(filename, "\\") {
+		writeError(w, http.StatusBadRequest, "Invalid filename")
+		return
+	}
+
+	logDir := s.cfg.ResolveLogDir(s.execDir)
+	logPath := filepath.Join(logDir, filename)
+
+	if info, err := os.Stat(logPath); err != nil || info.IsDir() {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("Log file not found: %s", filename))
+		return
+	}
+
+	// Truncate file to 0 bytes (keeps the file, clears content)
+	if err := os.Truncate(logPath, 0); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to clean log: %v", err))
+		return
+	}
+	slog.Info("Server log cleaned", "filename", filename, "user", r.Header.Get("X-Username"))
+	writeJSON(w, http.StatusOK, map[string]string{"message": "log cleared", "filename": filename})
 }
 
 // --- Helpers ---

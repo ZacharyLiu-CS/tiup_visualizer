@@ -63,6 +63,7 @@ export const serverLogAPI = {
     const token = localStorage.getItem('auth_token')
     return `${base}/api/v1/server-logs/${encodeURIComponent(filename)}?action=${action}&token=${encodeURIComponent(token || '')}`
   },
+  cleanLog: (filename) => api.delete(`/server-logs/${encodeURIComponent(filename)}`),
 }
 
 export const tikvAPI = {

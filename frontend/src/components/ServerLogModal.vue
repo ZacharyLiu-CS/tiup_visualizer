@@ -36,6 +36,7 @@
               <td class="actions-cell">
                 <button class="log-btn log-btn-view" @click="viewLog(file.filename)" title="View log in browser">View</button>
                 <button class="log-btn log-btn-download" @click="downloadLog(file.filename)" title="Download log file">Download</button>
+                <button class="log-btn log-btn-clean" @click="cleanLog(file.filename)" title="Clear log contents">Clean</button>
               </td>
             </tr>
           </tbody>
@@ -99,6 +100,15 @@ export default {
       document.body.appendChild(link)
       link.click()
       document.body.removeChild(link)
+    },
+    async cleanLog(filename) {
+      if (!confirm(`确认清空日志 ${filename}？此操作不可恢复。`)) return
+      try {
+        await serverLogAPI.cleanLog(filename)
+        this.fetchLogs()
+      } catch (e) {
+        alert('清空失败：' + (e.response?.data?.detail || e.message))
+      }
     },
     formatSize(bytes) {
       if (bytes < 1024) return bytes + ' B'
@@ -302,5 +312,15 @@ export default {
 .log-btn-download:hover {
   background: #a7f3d0;
   color: #064e3b;
+}
+
+.log-btn-clean {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.log-btn-clean:hover {
+  background: #fecaca;
+  color: #7f1d1d;
 }
 </style>

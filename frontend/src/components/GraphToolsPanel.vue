@@ -390,7 +390,7 @@ export default {
   position: fixed;
   top: 0;
   right: 0;
-  width: 520px;
+  width: 50vw;
   max-width: 100vw;
   height: 100vh;
   background: #1e1e2e;
