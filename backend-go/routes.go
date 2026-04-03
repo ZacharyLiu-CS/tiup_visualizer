@@ -21,6 +21,7 @@ type Server struct {
 	tiup        *TiUPService
 	tikv        *TiKVService
 	execDir     string
+	version     string
 	mux         *http.ServeMux
 }
 
@@ -31,8 +32,10 @@ func NewServer(cfg *AppConfig, execDir string) *Server {
 		tiup:    NewTiUPService(),
 		tikv:    NewTiKVService(),
 		execDir: execDir,
+		version: loadVersion(execDir),
 		mux:     http.NewServeMux(),
 	}
+	slog.Info("Build version", "version", s.version)
 	s.registerRoutes()
 	return s
 }
@@ -46,6 +49,9 @@ func (s *Server) registerRoutes() {
 
 	// Health check (no auth)
 	s.mux.HandleFunc("GET /health", s.handleHealth)
+
+	// Version (no auth)
+	s.mux.HandleFunc("GET "+prefix+"/version", s.handleVersion)
 
 	// Auth routes (no auth required)
 	s.mux.HandleFunc("POST "+prefix+"/auth/login", s.handleLogin)
@@ -98,6 +104,25 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "healthy"})
+}
+
+// --- Version ---
+
+func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"version": s.version})
+}
+
+// loadVersion reads the version file next to the binary (or CWD).
+func loadVersion(execDir string) string {
+	for _, p := range []string{
+		filepath.Join(execDir, "version"),
+		"version",
+	} {
+		if data, err := os.ReadFile(p); err == nil {
+			return strings.TrimSpace(string(data))
+		}
+	}
+	return "unknown"
 }
 
 // --- Auth ---

@@ -60,22 +60,21 @@ stages:
           - name: Pack TiUP Visualizer Package  
             run: |
               #!/bin/bash
+              set -e
               cd ./tiup-visualizer
-              NC='\033[0m'
-              TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-              ZIP_FILENAME="tiup-visualizer-${TIMESTAMP}.tar.gz"
+              VERSION=$(cat version | tr -d '[:space:]')
+              ZIP_FILENAME="tiup-visualizer-${VERSION}.tar.gz"
               echo "::set-variable name=f_name::${ZIP_FILENAME}"
 
               # Create zip file
-              echo -e "${YELLOW}Compressing build directory...${NC}"
-              cd "$PROJECT_ROOT"
+              echo "Compressing build directory... (version: $VERSION)"
               tar -czf "$ZIP_FILENAME" --transform 's/^build/tiup-visualizer/' build
 
               if [ ! -f "$ZIP_FILENAME" ]; then
-                  echo -e "${RED}Error: Failed to create zip file${NC}"
+                  echo "Error: Failed to create zip file"
                   exit 1
               fi
-              echo -e "${GREEN}Zip file created: $ZIP_FILENAME${NC}"
+              echo "Zip file created: $ZIP_FILENAME"
           - uses: UploadArtifactory@8.*
             name: Upload TiUP Visualizer Package
             with:

@@ -17,8 +17,8 @@ BUILD_DIR="$PROJECT_ROOT/build"
 
 # Upload configuration
 USERNAME="zacharyzliu"
-TOKEN="ca709e04679611f0b2495254002e0cf4"
-REPO="easygraph-tiup-visualizer"
+TOKEN="${UPLOAD_TOKEN:-}"
+REPO="${UPLOAD_REPO:-easygraph-tiup-visualizer}"
 
 # Check if build directory exists
 if [ ! -d "$BUILD_DIR" ]; then
@@ -27,9 +27,14 @@ if [ ! -d "$BUILD_DIR" ]; then
     exit 1
 fi
 
-# Generate timestamp for versioning
-TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-ZIP_FILENAME="tiup-visualizer-${TIMESTAMP}.tar.gz"
+# Read version from version file
+VERSION_FILE="$PROJECT_ROOT/version"
+if [ ! -f "$VERSION_FILE" ]; then
+    echo -e "${RED}Error: version file not found at $VERSION_FILE${NC}"
+    exit 1
+fi
+VERSION=$(cat "$VERSION_FILE" | tr -d '[:space:]')
+ZIP_FILENAME="tiup-visualizer-${VERSION}.tar.gz"
 ZIP_PATH="$PROJECT_ROOT/$ZIP_FILENAME"
 
 # Create zip file
