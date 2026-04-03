@@ -59,7 +59,28 @@
             <!-- Custom PD -->
             <div class="form-group" v-else>
               <label>PD 地址</label>
-              <input v-model="kv.customPD" class="form-input" placeholder="10.0.0.1:2379,10.0.0.2:2379" />
+              <div class="pd-input-wrap">
+                <input
+                  v-model="kv.customPD"
+                  class="form-input"
+                  placeholder="10.0.0.1:2379,10.0.0.2:2379"
+                  @focus="showPDHistory = pdHistory.length > 0"
+                  @blur="hidePDHistoryDelayed"
+                  @input="showPDHistory = false"
+                  @keyup.enter="runKV2Graph"
+                />
+                <div v-if="showPDHistory" class="pd-history-dropdown">
+                  <div
+                    v-for="(h, i) in pdHistory"
+                    :key="i"
+                    class="pd-history-item"
+                    @mousedown.prevent="selectPDHistory(h)"
+                  >
+                    <span class="pd-history-text">{{ h }}</span>
+                    <button class="pd-history-del" @mousedown.prevent.stop="removePDHistory(i)" title="删除">×</button>
+                  </div>
+                </div>
+              </div>
             </div>
 
             <!-- Query mode -->
@@ -104,7 +125,7 @@
               </div>
               <div class="form-group flex-1" v-if="kv.mode === 'scan'">
                 <label>Limit</label>
-                <input v-model.number="kv.limit" type="number" class="form-input" placeholder="1000" min="1" max="10000" />
+                <input v-model.number="kv.limit" type="number" class="form-input" placeholder="100" min="1" max="10000" />
               </div>
             </div>
 
@@ -119,16 +140,25 @@
                 </svg>
                 {{ kv.loading ? '查询中...' : '执行查询' }}
               </button>
-              <button class="clear-btn" @click="clearKVResult" v-if="kv.result || kv.error">清除结果</button>
+              <button class="cancel-btn" v-if="kv.loading" @click="cancelKV2Graph">取消</button>
+              <button class="clear-btn" @click="clearKVResult" v-if="(kv.result !== null || kv.error) && !kv.loading">清除结果</button>
+            </div>
+
+            <!-- Empty result hint -->
+            <div v-if="kv.result !== null && !kv.error && kv.mode === 'scan' && kv.result.length === 0" class="result-empty">
+              未找到匹配前缀 <code>{{ kv.prefix }}</code> 的数据
             </div>
 
             <!-- Error -->
             <div v-if="kv.error" class="result-error">{{ kv.error }}</div>
 
             <!-- Result -->
-            <div v-if="kv.result !== null && !kv.error" class="result-box">
+            <div v-if="kv.result !== null && !kv.error && !(kv.mode === 'scan' && kv.result.length === 0)" class="result-box">
               <div class="result-header">
-                <span class="result-count" v-if="kv.mode === 'scan'">共 {{ kv.resultCount }} 条</span>
+                <span class="result-count" v-if="kv.mode === 'scan'">
+                  共 {{ kv.resultCount }} 条
+                  <span v-if="parseErrorCount > 0" class="parse-error-hint">（{{ parseErrorCount }} 条解析异常）</span>
+                </span>
                 <button class="copy-btn" @click="copyResult" title="复制 JSON">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13">
                     <rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
@@ -146,7 +176,7 @@
                     </tr>
                   </thead>
                   <tbody>
-                    <tr v-for="(row, i) in kv.result" :key="i">
+                    <tr v-for="(row, i) in kv.result" :key="i" :class="{ 'row-error': row.parseError }">
                       <td v-for="col in scanColumns" :key="col">{{ row[col] ?? '' }}</td>
                     </tr>
                   </tbody>
@@ -168,6 +198,10 @@
 import { mapState } from 'pinia'
 import { useClusterStore } from '../stores/cluster'
 import { tikvAPI } from '../services/api'
+
+const PD_HISTORY_KEY = 'kv2graph_pd_history'
+const PD_HISTORY_MAX = 10
+const QUERY_TIMEOUT = 60000 // 60s
 
 export default {
   name: 'GraphToolsPanel',
@@ -193,7 +227,7 @@ export default {
         prefix: 'g%',
         cf: 'default',
         parseType: 'graph_meta',
-        limit: 1000,
+        limit: 100,
         loading: false,
         result: null,
         resultCount: 0,
@@ -201,6 +235,9 @@ export default {
         error: '',
       },
       copied: false,
+      showPDHistory: false,
+      pdHistory: [],
+      _abortController: null,
     }
   },
   computed: {
@@ -209,48 +246,120 @@ export default {
       if (this.kv.pdSource === 'cluster') return !!this.kv.clusterName
       return !!this.kv.customPD.trim()
     },
+    parseErrorCount() {
+      if (!Array.isArray(this.kv.result)) return 0
+      return this.kv.result.filter(r => r.parseError).length
+    },
     scanColumns() {
       if (!Array.isArray(this.kv.result) || this.kv.result.length === 0) return []
       const all = new Set()
       this.kv.result.forEach(row => Object.keys(row).forEach(k => all.add(k)))
-      // Put key fields first
       const priority = ['id', 'name', 'key']
       const rest = [...all].filter(k => !priority.includes(k))
       return [...priority.filter(k => all.has(k)), ...rest]
     },
   },
+  mounted() {
+    this.pdHistory = this.loadPDHistory()
+  },
   methods: {
+    loadPDHistory() {
+      try {
+        return JSON.parse(localStorage.getItem(PD_HISTORY_KEY) || '[]')
+      } catch { return [] }
+    },
+    savePDHistory() {
+      localStorage.setItem(PD_HISTORY_KEY, JSON.stringify(this.pdHistory))
+    },
+    addPDHistory(pd) {
+      const trimmed = pd.trim()
+      if (!trimmed) return
+      this.pdHistory = [trimmed, ...this.pdHistory.filter(h => h !== trimmed)].slice(0, PD_HISTORY_MAX)
+      this.savePDHistory()
+    },
+    removePDHistory(i) {
+      this.pdHistory.splice(i, 1)
+      this.savePDHistory()
+    },
+    selectPDHistory(h) {
+      this.kv.customPD = h
+      this.showPDHistory = false
+    },
+    hidePDHistoryDelayed() {
+      setTimeout(() => { this.showPDHistory = false }, 150)
+    },
     async runKV2Graph() {
       if (!this.kvReady) return
+      // Cancel any previous in-flight request
+      if (this._abortController) {
+        this._abortController.abort()
+      }
+      this._abortController = new AbortController()
+      const signal = this._abortController.signal
+
       this.kv.loading = true
       this.kv.error = ''
       this.kv.result = null
       this.kv.resultCount = 0
       this.kv.resultJson = ''
+
+      // Save PD history on use
+      if (this.kv.pdSource === 'custom') {
+        this.addPDHistory(this.kv.customPD)
+      }
+
+      // Timeout via AbortController
+      const timer = setTimeout(() => {
+        if (this._abortController) this._abortController.abort()
+      }, QUERY_TIMEOUT)
+
       try {
         const opts = { 'parse-type': this.kv.parseType, cf: this.kv.cf }
         const useDirect = this.kv.pdSource === 'custom'
         if (this.kv.mode === 'key') {
-          if (!this.kv.key) { this.kv.error = '请输入 Key'; this.kv.loading = false; return }
+          if (!this.kv.key) { this.kv.error = '请输入 Key'; return }
           const res = useDirect
-            ? await tikvAPI.directGetKey(this.kv.customPD.trim(), this.kv.key, opts)
-            : await tikvAPI.getKey(this.kv.clusterName, this.kv.key, opts)
+            ? await tikvAPI.directGetKey(this.kv.customPD.trim(), this.kv.key, opts, signal)
+            : await tikvAPI.getKey(this.kv.clusterName, this.kv.key, opts, signal)
           this.kv.result = res.data
           this.kv.resultJson = JSON.stringify(res.data, null, 2)
         } else {
-          if (!this.kv.prefix) { this.kv.error = '请输入前缀'; this.kv.loading = false; return }
-          if (this.kv.limit) opts.limit = this.kv.limit
+          if (!this.kv.prefix) { this.kv.error = '请输入前缀'; return }
+          opts.limit = this.kv.limit || 100
           const res = useDirect
-            ? await tikvAPI.directScanPrefix(this.kv.customPD.trim(), this.kv.prefix, opts)
-            : await tikvAPI.scanPrefix(this.kv.clusterName, this.kv.prefix, opts)
+            ? await tikvAPI.directScanPrefix(this.kv.customPD.trim(), this.kv.prefix, opts, signal)
+            : await tikvAPI.scanPrefix(this.kv.clusterName, this.kv.prefix, opts, signal)
           this.kv.result = res.data.entries || []
           this.kv.resultCount = res.data.total || 0
           this.kv.resultJson = JSON.stringify(this.kv.result, null, 2)
+          if (this.kv.result.length === 0) {
+            // empty result is handled by template, no error
+          }
         }
       } catch (e) {
-        this.kv.error = e.response?.data?.detail || e.message || '查询失败'
+        if (e.name === 'CanceledError' || e.code === 'ERR_CANCELED') {
+          this.kv.error = '查询已取消'
+        } else if (e.name === 'AbortError') {
+          this.kv.error = `查询超时（>${QUERY_TIMEOUT / 1000}s），请检查 PD 地址是否可达`
+        } else {
+          const msg = e.response?.data?.detail || e.message || '查询失败'
+          // Distinguish connection errors from data errors
+          if (e.code === 'ECONNABORTED' || msg.toLowerCase().includes('timeout')) {
+            this.kv.error = `连接超时：${msg}`
+          } else {
+            this.kv.error = msg
+          }
+        }
       } finally {
+        clearTimeout(timer)
         this.kv.loading = false
+        this._abortController = null
+      }
+    },
+    cancelKV2Graph() {
+      if (this._abortController) {
+        this._abortController.abort()
+        this._abortController = null
       }
     },
     clearKVResult() {
@@ -514,6 +623,104 @@ label {
   padding: 10px 12px;
   font-size: 13px;
   word-break: break-all;
+}
+
+/* Empty result */
+.result-empty {
+  background: rgba(166, 173, 200, 0.08);
+  border: 1px solid #45475a;
+  border-radius: 6px;
+  color: #6c7086;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+.result-empty code {
+  color: #89b4fa;
+  font-family: monospace;
+}
+
+/* Cancel button */
+.cancel-btn {
+  background: rgba(243, 139, 168, 0.15);
+  color: #f38ba8;
+  border: 1px solid rgba(243, 139, 168, 0.4);
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.cancel-btn:hover {
+  background: rgba(243, 139, 168, 0.28);
+}
+
+/* Parse error hint */
+.parse-error-hint {
+  color: #fab387;
+  margin-left: 4px;
+}
+
+/* Row error highlight */
+.result-table tr.row-error td {
+  color: #fab387;
+  background: rgba(250, 179, 135, 0.06);
+}
+
+/* PD history dropdown */
+.pd-input-wrap {
+  position: relative;
+}
+
+.pd-history-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: #1e1e2e;
+  border: 1px solid #45475a;
+  border-radius: 6px;
+  z-index: 100;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.pd-history-item {
+  display: flex;
+  align-items: center;
+  padding: 7px 10px;
+  cursor: pointer;
+  transition: background 0.12s;
+  gap: 8px;
+}
+.pd-history-item:hover {
+  background: #313244;
+}
+
+.pd-history-text {
+  flex: 1;
+  font-size: 12px;
+  color: #cdd6f4;
+  font-family: monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pd-history-del {
+  background: none;
+  border: none;
+  color: #6c7086;
+  font-size: 15px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+  flex-shrink: 0;
+  border-radius: 3px;
+  transition: color 0.12s;
+}
+.pd-history-del:hover {
+  color: #f38ba8;
 }
 
 /* Result box */

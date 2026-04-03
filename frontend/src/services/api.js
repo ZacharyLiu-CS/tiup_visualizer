@@ -66,31 +66,31 @@ export const serverLogAPI = {
 }
 
 export const tikvAPI = {
-  getKey: (clusterName, key, options = {}) => {
+  getKey: (clusterName, key, options = {}, signal) => {
     const params = { key, ...options }
     if (!params['parse-type']) params['parse-type'] = 'graph_meta'
     if (!params.cf) params.cf = 'default'
-    return api.get(`/tikv/${encodeURIComponent(clusterName)}/key`, { params })
+    return api.get(`/tikv/${encodeURIComponent(clusterName)}/key`, { params, signal })
   },
-  scanPrefix: (clusterName, prefix, options = {}) => {
+  scanPrefix: (clusterName, prefix, options = {}, signal) => {
     const params = { prefix, ...options }
     if (!params['parse-type']) params['parse-type'] = 'graph_meta'
     if (!params.cf) params.cf = 'default'
     if (options.limit) params.limit = options.limit
-    return api.get(`/tikv/${encodeURIComponent(clusterName)}/scan`, { params })
+    return api.get(`/tikv/${encodeURIComponent(clusterName)}/scan`, { params, signal })
   },
-  directGetKey: (pd, key, options = {}) => {
+  directGetKey: (pd, key, options = {}, signal) => {
     const params = { pd, key, ...options }
     if (!params['parse-type']) params['parse-type'] = 'graph_meta'
     if (!params.cf) params.cf = 'default'
-    return api.get('/tikv-direct/key', { params })
+    return api.get('/tikv-direct/key', { params, signal })
   },
-  directScanPrefix: (pd, prefix, options = {}) => {
+  directScanPrefix: (pd, prefix, options = {}, signal) => {
     const params = { pd, prefix, ...options }
     if (!params['parse-type']) params['parse-type'] = 'graph_meta'
     if (!params.cf) params.cf = 'default'
     if (options.limit) params.limit = options.limit
-    return api.get('/tikv-direct/scan', { params })
+    return api.get('/tikv-direct/scan', { params, signal })
   },
 }
 
