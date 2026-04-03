@@ -1,0 +1,160 @@
+# 矩阵构建流水线模板
+# 适用场景: 需要在多个环境/版本下测试的项目
+
+name: 矩阵构建流水线
+
+on:
+  push:
+    branches:
+      - master
+      - develop
+  pull_request:
+
+stages:
+  - name: test
+    displayName: 测试阶段
+  - name: build
+    displayName: 构建阶段
+
+jobs:
+  # ========== 多版本兼容性测试 ==========
+  - stage: test
+    job: compatibility-test
+    displayName: 兼容性测试
+    strategy:
+      matrix:
+        # 矩阵变量定义
+        node_version: ['14', '16', '18', '20']
+        os: ['ubuntu', 'macos', 'windows']
+      max-parallel: 6
+      fail-fast: false
+      # 排除特定组合
+      exclude:
+        - os: macos
+          node_version: '14'
+        - os: windows
+          node_version: '14'
+    pool:
+      name: ${{ matrix.os }}
+      container: node:${{ matrix.node_version }}
+    env:
+      TEST_ENV: ci
+    steps:
+      - checkout: self
+      
+      - name: 显示环境信息
+        run: |
+          echo "OS: ${{ matrix.os }}"
+          echo "Node版本: ${{ matrix.node_version }}"
+          node --version
+          npm --version
+      
+      - name: 安装依赖
+        run: npm ci
+      
+      - name: 运行测试
+        run: npm test
+        timeout: 30
+      
+      - name: 上传测试结果
+        if: always()
+        uses: upload-artifact@v1
+        with:
+          name: test-results-${{ matrix.os }}-node${{ matrix.node_version }}
+          path: test-results/
+  
+  # ========== 多环境构建 ==========
+  - stage: build
+    job: multi-env-build
+    displayName: 多环境构建
+    dependsOn: compatibility-test
+    strategy:
+      matrix:
+        # 复杂对象矩阵
+        environment:
+          - name: development
+            api_url: https://api-dev.example.com
+            features: "feature-a,feature-b"
+            optimization: 0
+          - name: staging
+            api_url: https://api-staging.example.com
+            features: "feature-a,feature-b,feature-c"
+            optimization: 1
+          - name: production
+            api_url: https://api.example.com
+            features: "feature-a"
+            optimization: 2
+      max-parallel: 3
+    pool:
+      name: docker
+      container: node:16
+    env:
+      API_URL: ${{ matrix.environment.api_url }}
+      FEATURES: ${{ matrix.environment.features }}
+      OPTIMIZATION: ${{ matrix.environment.optimization }}
+    steps:
+      - checkout: self
+      
+      - name: 安装依赖
+        run: npm ci
+      
+      - name: 构建应用
+        run: |
+          echo "构建环境: ${{ matrix.environment.name }}"
+          echo "API地址: $API_URL"
+          echo "特性开关: $FEATURES"
+          echo "优化级别: $OPTIMIZATION"
+          npm run build
+      
+      - name: 打包构建产物
+        run: |
+          tar -czf build-${{ matrix.environment.name }}.tar.gz dist/
+      
+      - name: 上传构建产物
+        uses: upload-artifact@v1
+        with:
+          name: build-${{ matrix.environment.name }}
+          path: build-${{ matrix.environment.name }}.tar.gz
+  
+  # ========== 浏览器兼容性测试 ==========
+  - stage: test
+    job: browser-test
+    displayName: 浏览器测试
+    strategy:
+      matrix:
+        browser:
+          - name: chrome
+            version: latest
+          - name: firefox
+            version: latest
+          - name: safari
+            version: latest
+      max-parallel: 3
+    pool:
+      name: docker
+      container: selenium/${{ matrix.browser.name }}:${{ matrix.browser.version }}
+    steps:
+      - checkout: self
+      
+      - name: 运行E2E测试
+        run: |
+          echo "浏览器: ${{ matrix.browser.name }}"
+          echo "版本: ${{ matrix.browser.version }}"
+          npm run test:e2e:${{ matrix.browser.name }}
+      
+      - name: 上传截图
+        if: failure()
+        uses: upload-artifact@v1
+        with:
+          name: screenshots-${{ matrix.browser.name }}
+          path: screenshots/
+
+# ========== 通知配置 ==========
+notices:
+  - type: email
+    title: 矩阵构建完成 - ${{ ci.branch }}
+    content: |
+      构建状态: ${{ ci.status }}
+      分支: ${{ ci.branch }}
+      提交: ${{ ci.commit_sha }}
+    if: ALWAYS

@@ -1,0 +1,230 @@
+# MR校验流水线模板
+# 适用场景: Merge Request代码审查和质量检查
+
+name: MR校验流水线
+
+# ========== 触发器 ==========
+on:
+  mr:
+    target-branches:
+      - master
+      - develop
+    action:
+      - open
+      - reopen
+      - push-update
+    report-commit-check: true
+    block-mr: true  # 失败时阻止MR合并
+
+# ========== 并发控制 ==========
+concurrency:
+  group: mr-${{ ci.pull_request_number }}
+  cancel-in-progress: true
+
+# ========== 阶段定义 ==========
+stages:
+  - name: lint
+    displayName: 代码检查
+  - name: test
+    displayName: 测试
+  - name: build
+    displayName: 构建验证
+
+jobs:
+  # ========== 代码风格检查 ==========
+  - stage: lint
+    job: code-lint
+    displayName: 代码风格检查
+    pool:
+      name: docker
+      container: node:16
+    steps:
+      - checkout: self
+        fetchDepth: 0  # 拉取完整历史用于diff
+      
+      - name: 安装依赖
+        run: npm ci
+      
+      - name: ESLint检查
+        run: npm run lint
+        continueOnError: false
+      
+      - name: Prettier检查
+        run: npm run format:check
+      
+      - name: 类型检查
+        run: npm run type-check
+  
+  # ========== 单元测试 ==========
+  - stage: test
+    job: unit-test
+    displayName: 单元测试
+    dependsOn: code-lint
+    pool:
+      name: docker
+      container: node:16
+    steps:
+      - checkout: self
+      
+      - name: 安装依赖
+        run: npm ci
+      
+      - name: 运行单元测试
+        run: npm run test:unit -- --coverage
+      
+      - name: 上传覆盖率报告
+        uses: upload-artifact@v1
+        with:
+          name: coverage-report
+          path: coverage/
+      
+      - name: 检查覆盖率阈值
+        run: |
+          COVERAGE=$(cat coverage/coverage-summary.json | jq '.total.lines.pct')
+          echo "当前覆盖率: $COVERAGE%"
+          if (( $(echo "$COVERAGE < 80" | bc -l) )); then
+            echo "❌ 覆盖率低于80%"
+            exit 1
+          fi
+  
+  # ========== 集成测试 ==========
+  - stage: test
+    job: integration-test
+    displayName: 集成测试
+    dependsOn: code-lint
+    pool:
+      name: docker
+      container: node:16
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test123
+          MYSQL_DATABASE: testdb
+        ports:
+          - 3306:3306
+      redis:
+        image: redis:6
+        ports:
+          - 6379:6379
+    steps:
+      - checkout: self
+      
+      - name: 安装依赖
+        run: npm ci
+      
+      - name: 等待服务启动
+        run: |
+          echo "等待MySQL启动..."
+          timeout 30 bash -c 'until mysqladmin ping -h127.0.0.1 -uroot -ptest123; do sleep 1; done'
+          echo "MySQL已就绪"
+      
+      - name: 运行数据库迁移
+        env:
+          DB_HOST: 127.0.0.1
+          DB_USER: root
+          DB_PASSWORD: test123
+          DB_NAME: testdb
+        run: npm run db:migrate
+      
+      - name: 运行集成测试
+        env:
+          DB_HOST: 127.0.0.1
+          REDIS_HOST: 127.0.0.1
+        run: npm run test:integration
+  
+  # ========== 构建验证 ==========
+  - stage: build
+    job: build-check
+    displayName: 构建验证
+    dependsOn:
+      - unit-test
+      - integration-test
+    pool:
+      name: docker
+      container: node:16
+    env:
+      NODE_ENV: production
+    steps:
+      - checkout: self
+      
+      - name: 安装依赖
+        run: npm ci
+      
+      - name: 构建应用
+        run: npm run build
+        timeout: 20
+      
+      - name: 检查构建产物
+        run: |
+          if [ ! -d "dist" ]; then
+            echo "❌ 构建产物目录不存在"
+            exit 1
+          fi
+          
+          SIZE=$(du -sh dist | cut -f1)
+          echo "✅ 构建成功,产物大小: $SIZE"
+      
+      - name: 包大小分析
+        run: |
+          npm run analyze:bundle
+          BUNDLE_SIZE=$(cat dist/bundle-size.json | jq '.size')
+          MAX_SIZE=5242880  # 5MB
+          
+          if [ $BUNDLE_SIZE -gt $MAX_SIZE ]; then
+            echo "⚠️ 包大小超过限制: $BUNDLE_SIZE > $MAX_SIZE"
+            exit 1
+          fi
+  
+  # ========== 安全扫描 ==========
+  - stage: lint
+    job: security-scan
+    displayName: 安全扫描
+    pool:
+      name: docker
+      container: node:16
+    steps:
+      - checkout: self
+      
+      - name: 依赖安全检查
+        run: npm audit --audit-level=moderate
+        continueOnError: true
+      
+      - name: 代码安全扫描
+        run: |
+          npx snyk test
+        continueOnError: true
+
+# ========== 收尾阶段 ==========
+finally:
+  - stage: cleanup
+    job: cleanup-resources
+    displayName: 清理资源
+    if: always()
+    steps:
+      - run: echo "清理测试资源"
+
+# ========== 通知配置 ==========
+notices:
+  # MR检查失败通知
+  - type: wework-message
+    title: MR检查失败
+    content: |
+      **MR检查失败**
+      MR: #${{ ci.pull_request_number }}
+      分支: ${{ ci.branch }} → ${{ ci.base_ref }}
+      触发人: ${{ ci.author }}
+    receivers:
+      - ${{ ci.author }}
+    if: FAILURE
+  
+  # MR检查成功通知
+  - type: wework-message
+    title: MR检查通过
+    content: |
+      **MR检查通过** ✅
+      MR: #${{ ci.pull_request_number }}
+      可以合并了
+    receivers:
+      - ${{ ci.author }}
+    if: SUCCESS
