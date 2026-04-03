@@ -83,12 +83,12 @@ func ExecuteCommand(command string, timeout time.Duration) (string, error) {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
-	out, err := cmd.Output()
+	out, err := cmd.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
-		return "", fmt.Errorf("command execution timeout")
+		return string(out), fmt.Errorf("command execution timeout")
 	}
 	if err != nil {
-		return "", fmt.Errorf("command execution failed: %w", err)
+		return string(out), fmt.Errorf("command execution failed: %w", err)
 	}
 	return string(out), nil
 }

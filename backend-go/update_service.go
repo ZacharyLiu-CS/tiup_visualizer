@@ -176,7 +176,7 @@ func (u *UpdateService) DownloadAndApply(release *LatestRelease) error {
 
 	// Step 5: deploy
 	deployArgs := u.buildDeployArgs()
-	cmd := fmt.Sprintf("cd %s && bash deploy-nginx.sh %s 2>&1", extractedDir, deployArgs)
+	cmd := fmt.Sprintf("cd %s && bash deploy-nginx.sh %s", extractedDir, deployArgs)
 	slog.Info("[update] Step 5/5: Running deploy script", "cmd", cmd, "deploy_args", deployArgs)
 	deployStart := time.Now()
 	out, err = ExecuteCommand(cmd, 5*time.Minute)
@@ -191,6 +191,7 @@ func (u *UpdateService) DownloadAndApply(release *LatestRelease) error {
 	if err != nil {
 		slog.Error("[update] Deploy script failed",
 			"error", err,
+			"output", out,
 			"elapsed", time.Since(deployStart).Round(time.Millisecond),
 		)
 		cleanupTmpDir(tmpDir)
