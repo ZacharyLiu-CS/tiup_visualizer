@@ -94,4 +94,9 @@ export const tikvAPI = {
   },
 }
 
+export const updateAPI = {
+  check: () => api.get('/update/check'),
+  apply: () => api.post('/update/apply'),
+}
+
 export default api

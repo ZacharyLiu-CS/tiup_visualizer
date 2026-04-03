@@ -16,13 +16,14 @@ import (
 
 // Server holds all dependencies for HTTP handlers.
 type Server struct {
-	cfg         *AppConfig
-	auth        *AuthService
-	tiup        *TiUPService
-	tikv        *TiKVService
-	execDir     string
-	version     string
-	mux         *http.ServeMux
+	cfg     *AppConfig
+	auth    *AuthService
+	tiup    *TiUPService
+	tikv    *TiKVService
+	update  *UpdateService
+	execDir string
+	version string
+	mux     *http.ServeMux
 }
 
 func NewServer(cfg *AppConfig, execDir string) *Server {
@@ -31,6 +32,7 @@ func NewServer(cfg *AppConfig, execDir string) *Server {
 		auth:    NewAuthService(cfg),
 		tiup:    NewTiUPService(),
 		tikv:    NewTiKVService(),
+		update:  NewUpdateService(execDir),
 		execDir: execDir,
 		version: loadVersion(execDir),
 		mux:     http.NewServeMux(),
@@ -52,6 +54,10 @@ func (s *Server) registerRoutes() {
 
 	// Version (no auth)
 	s.mux.HandleFunc("GET "+prefix+"/version", s.handleVersion)
+
+	// Update routes (auth required)
+	s.mux.HandleFunc("GET "+prefix+"/update/check", s.requireAuth(s.handleUpdateCheck))
+	s.mux.HandleFunc("POST "+prefix+"/update/apply", s.requireAuth(s.handleUpdateApply))
 
 	// Auth routes (no auth required)
 	s.mux.HandleFunc("POST "+prefix+"/auth/login", s.handleLogin)
@@ -110,6 +116,48 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"version": s.version})
+}
+
+// --- Update ---
+
+func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	latest, err := s.update.FetchLatestRelease()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	needUpdate := latest.Version > s.version
+	writeJSON(w, http.StatusOK, CheckResult{
+		CurrentVersion: s.version,
+		LatestRelease:  latest,
+		NeedUpdate:     needUpdate,
+	})
+}
+
+func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
+	latest, err := s.update.FetchLatestRelease()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if latest.Version <= s.version {
+		writeJSON(w, http.StatusOK, map[string]string{"message": "already up-to-date"})
+		return
+	}
+	// Run update asynchronously so we can return a response before the process restarts
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"message": "update started",
+		"version": latest.Version,
+	})
+	// Flush response before applying
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	go func() {
+		if err := s.update.DownloadAndApply(latest); err != nil {
+			slog.Error("Update failed", "error", err)
+		}
+	}()
 }
 
 // loadVersion reads the version file next to the binary (or CWD).

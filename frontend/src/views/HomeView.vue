@@ -3,6 +3,21 @@
     <header class="app-header">
       <h1>TiUP Cluster Visualizer</h1>
       <div class="header-actions">
+        <!-- Check Update button -->
+        <button class="header-btn header-btn-update" @click="checkUpdate" :disabled="updateChecking" :title="updateBtnTitle">
+          <svg v-if="updateChecking" class="spin-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+            <path d="M21 12a9 9 0 11-6.219-8.56" />
+          </svg>
+          <svg v-else-if="updateAvailable" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+            <polyline points="17 11 12 6 7 11" /><line x1="12" y1="18" x2="12" y2="6" />
+          </svg>
+          <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+            <polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 .49-3.51" />
+          </svg>
+          <span v-if="updateAvailable" class="update-badge"></span>
+          {{ updateChecking ? '检查中...' : updateAvailable ? '有新版本' : '检查更新' }}
+        </button>
+
         <div class="terminal-group">
           <button @click="showTerminal = !showTerminal" class="header-btn" title="Toggle Terminal">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
@@ -91,6 +106,46 @@
     <!-- Graph Tools Panel -->
     <GraphToolsPanel :visible="showGraphTools" @close="showGraphTools = false" />
 
+    <!-- Update Modal -->
+    <teleport to="body">
+      <transition name="fade">
+        <div v-if="showUpdateModal" class="update-modal-overlay" @click.self="showUpdateModal = false">
+          <div class="update-modal">
+            <div class="update-modal-header">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
+                <polyline points="17 11 12 6 7 11" /><line x1="12" y1="18" x2="12" y2="6" />
+              </svg>
+              {{ updateResult && updateResult.needUpdate ? '发现新版本' : '已是最新版本' }}
+              <button class="update-close-btn" @click="showUpdateModal = false">&times;</button>
+            </div>
+            <div class="update-modal-body" v-if="updateResult">
+              <div class="update-info-row">
+                <span class="update-label">当前版本</span>
+                <span class="update-value">{{ updateResult.current_version }}</span>
+              </div>
+              <div class="update-info-row" v-if="updateResult.latest_release">
+                <span class="update-label">最新版本</span>
+                <span class="update-value" :class="{ 'update-highlight': updateResult.need_update }">{{ updateResult.latest_release.version }}</span>
+              </div>
+              <div v-if="!updateResult.need_update" class="update-ok-msg">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><polyline points="20 6 9 17 4 12" /></svg>
+                当前已是最新版本，无需更新。
+              </div>
+              <div v-if="updateApplying" class="update-applying-msg">
+                <svg class="spin-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 12a9 9 0 11-6.219-8.56" /></svg>
+                正在下载并部署新版本，服务将自动重启，请稍候...
+              </div>
+              <div v-if="updateApplyResult" class="update-apply-result" :class="{ error: updateApplyError }">{{ updateApplyResult }}</div>
+            </div>
+            <div class="update-modal-footer" v-if="updateResult && updateResult.need_update && !updateApplying">
+              <button class="update-apply-btn" @click="applyUpdate">立即更新</button>
+              <button class="update-cancel-btn" @click="showUpdateModal = false">稍后</button>
+            </div>
+          </div>
+        </div>
+      </transition>
+    </teleport>
+
     <div class="loading-overlay" v-if="loading">
       <div class="spinner"></div>
       <p>Loading clusters...</p>
@@ -164,6 +219,7 @@ import ConnectionLines from '../components/ConnectionLines.vue'
 import WebTerminal from '../components/WebTerminal.vue'
 import ServerLogModal from '../components/ServerLogModal.vue'
 import GraphToolsPanel from '../components/GraphToolsPanel.vue'
+import { updateAPI } from '../services/api'
 
 export default {
   name: 'HomeView',
@@ -199,7 +255,15 @@ export default {
         { value: 'float', label: 'Float' }
       ],
       showServerLogs: false,
-      showGraphTools: false
+      showGraphTools: false,
+      // update
+      updateChecking: false,
+      updateAvailable: false,
+      updateResult: null,
+      showUpdateModal: false,
+      updateApplying: false,
+      updateApplyResult: '',
+      updateApplyError: false,
     }
   },
   computed: {
@@ -227,6 +291,12 @@ export default {
       })
       return map
     },
+    updateBtnTitle() {
+      if (this.updateResult) {
+        return `当前版本: ${this.updateResult.current_version}`
+      }
+      return '检查是否有新版本'
+    },
     highlightedHosts() {
       if (this.selectedCluster) {
         return this.getHostsForCluster(this.selectedCluster)
@@ -243,6 +313,8 @@ export default {
   async mounted() {
     await this.refresh()
     document.addEventListener('click', this.handleClickOutside)
+    // Silently check for updates on login
+    this.checkUpdateSilent()
   },
   beforeUnmount() {
     document.removeEventListener('click', this.handleClickOutside)
@@ -304,6 +376,47 @@ export default {
     },
     openGraphTools() {
       this.showGraphTools = true
+    },
+    async checkUpdateSilent() {
+      try {
+        const res = await updateAPI.check()
+        this.updateResult = res.data
+        this.updateAvailable = res.data.need_update
+        if (res.data.need_update) {
+          this.showUpdateModal = true
+        }
+      } catch (e) {
+        // silently ignore on auto-check
+      }
+    },
+    async checkUpdate() {
+      this.updateChecking = true
+      this.updateApplyResult = ''
+      this.updateApplyError = false
+      try {
+        const res = await updateAPI.check()
+        this.updateResult = res.data
+        this.updateAvailable = res.data.need_update
+        this.showUpdateModal = true
+      } catch (e) {
+        this.updateResult = null
+        alert('检查更新失败：' + (e.response?.data?.detail || e.message))
+      } finally {
+        this.updateChecking = false
+      }
+    },
+    async applyUpdate() {
+      this.updateApplying = true
+      this.updateApplyResult = ''
+      this.updateApplyError = false
+      try {
+        await updateAPI.apply()
+        this.updateApplyResult = '更新任务已启动，服务将在后台下载并重启，请稍候几分钟后刷新页面。'
+      } catch (e) {
+        this.updateApplyResult = '发起更新失败：' + (e.response?.data?.detail || e.message)
+        this.updateApplyError = true
+        this.updateApplying = false
+      }
     },
     openAIAnalysisPanel() {
       window.open('https://knot.woa.com/chat?web_key=4a8f043b1b9b41239557aa8c6e8dfe84&workspace_id=a5f9086a466f44428c95c443bb576484', '_blank')
@@ -685,5 +798,183 @@ export default {
 }
 
 /* AI Analysis button – same glass style as other header buttons */
+
+/* Update button */
+.header-btn-update {
+  position: relative;
+}
+
+.update-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  background: #f38ba8;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255,255,255,0.5);
+}
+
+.spin-icon {
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Update Modal */
+.update-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.35);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.update-modal {
+  background: #1e1e2e;
+  border: 1px solid #313244;
+  border-radius: 12px;
+  width: 420px;
+  max-width: 90vw;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  overflow: hidden;
+}
+
+.update-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 20px;
+  background: #181825;
+  border-bottom: 1px solid #313244;
+  font-weight: 700;
+  font-size: 15px;
+  color: #cdd6f4;
+}
+
+.update-close-btn {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: #6c7086;
+  font-size: 20px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 4px;
+  border-radius: 4px;
+  transition: color 0.15s;
+}
+.update-close-btn:hover { color: #f38ba8; }
+
+.update-modal-body {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.update-info-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.update-label {
+  font-size: 12px;
+  color: #6c7086;
+  font-weight: 600;
+  width: 70px;
+  flex-shrink: 0;
+}
+
+.update-value {
+  font-size: 13px;
+  color: #cdd6f4;
+  font-family: monospace;
+}
+
+.update-highlight {
+  color: #a6e3a1;
+  font-weight: 700;
+}
+
+.update-ok-msg {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #a6e3a1;
+  font-size: 13px;
+  background: rgba(166, 227, 161, 0.08);
+  border: 1px solid rgba(166, 227, 161, 0.2);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.update-applying-msg {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #89b4fa;
+  font-size: 13px;
+  background: rgba(137, 180, 250, 0.08);
+  border: 1px solid rgba(137, 180, 250, 0.2);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.update-apply-result {
+  font-size: 13px;
+  color: #a6e3a1;
+  background: rgba(166, 227, 161, 0.08);
+  border: 1px solid rgba(166, 227, 161, 0.2);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+.update-apply-result.error {
+  color: #f38ba8;
+  background: rgba(243, 139, 168, 0.08);
+  border-color: rgba(243, 139, 168, 0.2);
+}
+
+.update-modal-footer {
+  display: flex;
+  gap: 10px;
+  padding: 16px 20px;
+  border-top: 1px solid #313244;
+  justify-content: flex-end;
+}
+
+.update-apply-btn {
+  background: #a6e3a1;
+  color: #1e1e2e;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 20px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.update-apply-btn:hover { background: #c3f0bf; }
+
+.update-cancel-btn {
+  background: #313244;
+  color: #a6adc8;
+  border: 1px solid #45475a;
+  border-radius: 6px;
+  padding: 8px 16px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.update-cancel-btn:hover { background: #45475a; }
+
+.fade-enter-active, .fade-leave-active { transition: opacity 0.2s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 
 </style>

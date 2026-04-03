@@ -9,12 +9,16 @@ BUILD_DIR := build
 # Override with: BASE_PATH=/my-app make build
 BASE_PATH ?= /tiup-visualizer
 
-.PHONY: all clean build frontend backend backend-only dev dev-backend dev-frontend package upload ensure-static
+.PHONY: all clean build frontend backend backend-only dev dev-backend dev-frontend package upload ensure-static install-hooks
 
-all: build
+all: install-hooks build
+
+# Install git hooks (auto-update version file on each commit)
+install-hooks:
+	@bash scripts/install-hooks.sh
 
 # Ensure static directory exists with a placeholder (required by go:embed in static.go)
-ensure-static:
+ensure-static: install-hooks
 	@mkdir -p $(STATIC_DIR)
 	@test -n "$$(ls -A $(STATIC_DIR) 2>/dev/null)" || touch $(STATIC_DIR)/.gitkeep
 
