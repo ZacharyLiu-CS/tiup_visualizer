@@ -122,6 +122,11 @@ sudo rm -f "$DEPLOY_DIR/tiup-visualizer"
 sudo cp "$BUILD_DIR/tiup-visualizer" "$DEPLOY_DIR/tiup-visualizer"
 sudo chmod +x "$DEPLOY_DIR/tiup-visualizer"
 
+# Copy version file
+if [ -f "$BUILD_DIR/version" ]; then
+    sudo cp "$BUILD_DIR/version" "$DEPLOY_DIR/version"
+fi
+
 # Copy config.yaml (only if not already deployed, to preserve user edits)
 if [ ! -f "$DEPLOY_DIR/config.yaml" ]; then
     if [ -f "$BUILD_DIR/config.yaml" ]; then

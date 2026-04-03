@@ -56,6 +56,7 @@ package:
 	@mkdir -p $(BUILD_DIR)
 	@cp $(BINARY) $(BUILD_DIR)/
 	@cp $(BACKEND_DIR)/config.yaml.example $(BUILD_DIR)/config.yaml
+	@cp version $(BUILD_DIR)/version
 	@cp -r $(FRONTEND_DIR)/dist $(BUILD_DIR)/static
 	@cp nginx.conf.template $(BUILD_DIR)/
 	@cp nginx.upstream.template $(BUILD_DIR)/
