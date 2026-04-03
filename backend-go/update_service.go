@@ -124,8 +124,13 @@ func (u *UpdateService) DownloadAndApply(release *LatestRelease) error {
 	)
 
 	// Step 3: extract
-	slog.Info("[update] Step 3/5: Extracting archive", "archive", archivePath, "dest", tmpDir)
-	extractCmd := fmt.Sprintf("tar -xzf %s -C %s", archivePath, tmpDir)
+	extractedDir := filepath.Join(tmpDir, strings.TrimSuffix(release.Filename, ".tar.gz"))
+	if err := os.MkdirAll(extractedDir, 0755); err != nil {
+		slog.Error("[update] Failed to create extract directory", "path", extractedDir, "error", err)
+		return fmt.Errorf("failed to create extract dir: %w", err)
+	}
+	slog.Info("[update] Step 3/5: Extracting archive", "archive", archivePath, "dest", extractedDir)
+	extractCmd := fmt.Sprintf("tar -xzf %s -C %s --strip-components=1", archivePath, extractedDir)
 	slog.Info("[update] Running command", "cmd", extractCmd)
 	out, err := ExecuteCommand(extractCmd, 5*time.Minute)
 	if out != "" {
@@ -135,10 +140,9 @@ func (u *UpdateService) DownloadAndApply(release *LatestRelease) error {
 		slog.Error("[update] Extract failed", "error", err, "output", out)
 		return fmt.Errorf("extract failed: %w\n%s", err, out)
 	}
-	slog.Info("[update] Archive extracted successfully")
+	slog.Info("[update] Archive extracted successfully", "dest", extractedDir)
 
 	// Verify extracted directory
-	extractedDir := filepath.Join(tmpDir, "tiup-visualizer")
 	if _, err := os.Stat(extractedDir); err != nil {
 		slog.Error("[update] Extracted directory not found", "expected_path", extractedDir, "error", err)
 		return fmt.Errorf("extracted directory not found at %s", extractedDir)
