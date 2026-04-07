@@ -14,6 +14,7 @@
             <div class="terminal-title">
               <span class="terminal-icon">&#9002;</span>
               Web Terminal
+              <span class="esc-hint">Use "Ctrl+[" to replicate the functionality of "Esc" in VIM editor.</span>
             </div>
             <div class="terminal-controls">
               <button class="ctrl-btn maximize-btn" @click="toggleMaximize" :title="isMaximized ? 'Restore' : 'Maximize'">
@@ -41,6 +42,7 @@
           <div class="terminal-title">
             <span class="terminal-icon">&#9002;</span>
             Web Terminal
+            <span class="esc-hint">Use "Ctrl+[" to replicate the functionality of "Esc" in VIM editor.</span>
           </div>
           <div class="terminal-controls">
             <button class="ctrl-btn close-btn" @click="handleClose" title="Close">&times;</button>
@@ -632,6 +634,15 @@ export default {
   font-size: 12px;
   color: #6c7086;
   flex-shrink: 0;
+  gap: 6px;
+}
+
+.esc-hint {
+  margin-left: 12px;
+  color: #585b70;
+  font-style: italic;
+  font-size: 11px;
+  font-weight: 400;
 }
 
 .status-dot {
