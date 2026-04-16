@@ -188,6 +188,259 @@
             </div>
           </div>
 
+          <!-- Region Balancer tab -->
+          <div v-if="activeTab === 'balancer'" class="tab-content">
+
+            <!-- Config View -->
+            <template v-if="bal.view === 'config'">
+              <div class="tool-desc">
+                <p>TiKV Region 均衡调度工具，分析 Region 分布并生成最优调度计划，支持批量执行与实时监控。</p>
+              </div>
+
+              <!-- PD Source -->
+              <div class="form-group">
+                <label>PD 来源</label>
+                <div class="radio-group">
+                  <label class="radio-label">
+                    <input type="radio" v-model="bal.pdSource" value="cluster" /> 选择集群
+                  </label>
+                  <label class="radio-label">
+                    <input type="radio" v-model="bal.pdSource" value="custom" /> 自定义 PD 地址
+                  </label>
+                </div>
+              </div>
+
+              <!-- Cluster selector -->
+              <div class="form-group" v-if="bal.pdSource === 'cluster'">
+                <label>集群</label>
+                <select v-model="bal.clusterName" class="form-select">
+                  <option value="">-- 选择集群 --</option>
+                  <option v-for="c in clusters" :key="c.name" :value="c.name">{{ c.name }}</option>
+                </select>
+              </div>
+
+              <!-- Custom PD -->
+              <div class="form-group" v-else>
+                <label>PD 地址</label>
+                <input v-model="bal.customPD" class="form-input" placeholder="10.0.0.1:2379,10.0.0.2:2379" />
+              </div>
+
+              <!-- TiUP Version -->
+              <div class="form-group">
+                <label>TiUP 版本</label>
+                <input v-model="bal.tiupVersion" class="form-input" placeholder="v8.1.0" />
+              </div>
+
+              <!-- Thresholds row -->
+              <div class="form-row">
+                <div class="form-group flex-1">
+                  <label>Peer 阈值</label>
+                  <input v-model.number="bal.peerThreshold" type="number" class="form-input" min="0" max="100" />
+                </div>
+                <div class="form-group flex-1">
+                  <label>Leader 阈值</label>
+                  <input v-model.number="bal.leaderThreshold" type="number" class="form-input" min="0" max="100" />
+                </div>
+              </div>
+
+              <!-- Batch & Concurrency row -->
+              <div class="form-row">
+                <div class="form-group flex-1">
+                  <label>批次大小</label>
+                  <input v-model.number="bal.batchSize" type="number" class="form-input" min="1" max="50" />
+                </div>
+                <div class="form-group flex-1">
+                  <label>并发度</label>
+                  <input v-model.number="bal.concurrency" type="number" class="form-input" min="1" max="10" />
+                </div>
+              </div>
+
+              <!-- Actions -->
+              <div class="form-actions">
+                <button class="run-btn" @click="analyzeCluster" :disabled="bal.analyzing || !balReady">
+                  <svg v-if="bal.analyzing" class="spin-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                    <path d="M21 12a9 9 0 11-6.219-8.56" />
+                  </svg>
+                  <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
+                    <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+                  </svg>
+                  {{ bal.analyzing ? '分析中...' : '分析集群' }}
+                </button>
+                <button class="clear-btn" @click="switchToQueue">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13">
+                    <rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="3" y="14" width="7" height="7" /><rect x="14" y="14" width="7" height="7" />
+                  </svg>
+                  查看任务队列
+                </button>
+              </div>
+
+              <!-- Error -->
+              <div v-if="bal.error" class="result-error">{{ bal.error }}</div>
+
+              <!-- Plan preview -->
+              <div v-if="bal.plan" class="bal-plan-preview">
+                <div class="bal-summary">
+                  <span>{{ bal.plan.total_regions }} regions / {{ bal.plan.total_stores }} stores</span>
+                  <span class="bal-summary-ops">
+                    {{ bal.plan.peer_ops }} peer transfers + {{ bal.plan.leader_ops }} leader transfers = {{ bal.plan.operations.length }} total
+                  </span>
+                </div>
+
+                <!-- Before distribution -->
+                <div class="bal-section">
+                  <div class="bal-section-title">当前分布</div>
+                  <div class="result-table-wrap">
+                    <table class="dist-table">
+                      <thead>
+                        <tr><th>Store</th><th>Peers</th><th>Peer Δ</th><th>Leaders</th><th>Leader Δ</th></tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="s in bal.plan.before" :key="s.store_id">
+                          <td>{{ s.store_id }}</td>
+                          <td>{{ s.peer_count }}</td>
+                          <td :class="deltaClass(s.peer_delta)">{{ formatDelta(s.peer_delta) }}</td>
+                          <td>{{ s.leader_count }}</td>
+                          <td :class="deltaClass(s.leader_delta)">{{ formatDelta(s.leader_delta) }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <!-- After distribution -->
+                <div class="bal-section">
+                  <div class="bal-section-title">预期分布</div>
+                  <div class="result-table-wrap">
+                    <table class="dist-table">
+                      <thead>
+                        <tr><th>Store</th><th>Peers</th><th>Peer Δ</th><th>Leaders</th><th>Leader Δ</th></tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="s in bal.plan.after" :key="s.store_id">
+                          <td>{{ s.store_id }}</td>
+                          <td>{{ s.peer_count }}</td>
+                          <td :class="deltaClass(s.peer_delta)">{{ formatDelta(s.peer_delta) }}</td>
+                          <td>{{ s.leader_count }}</td>
+                          <td :class="deltaClass(s.leader_delta)">{{ formatDelta(s.leader_delta) }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <!-- Operations list -->
+                <div class="bal-section">
+                  <div class="bal-section-title">调度操作 ({{ bal.plan.operations.length }})</div>
+                  <div class="ops-list">
+                    <div v-for="(op, i) in bal.plan.operations" :key="i" class="op-item">
+                      <span class="op-index">[{{ i + 1 }}]</span>
+                      <span class="op-type" :class="op.type === 'transfer-peer' ? 'op-peer' : 'op-leader'">{{ op.type }}</span>
+                      <span>region={{ op.region_id }}</span>
+                      <span v-if="op.from_store">store:{{ op.from_store }}→{{ op.to_store }}</span>
+                      <span v-else>to:store-{{ op.to_store }}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Execute button -->
+                <div class="form-actions">
+                  <button class="run-btn" @click="executePlan" :disabled="!bal.plan || bal.plan.operations.length === 0">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
+                      <polygon points="5 3 19 12 5 21 5 3" />
+                    </svg>
+                    执行计划
+                  </button>
+                  <button class="clear-btn" @click="bal.plan = null">清除计划</button>
+                </div>
+              </div>
+            </template>
+
+            <!-- Queue View -->
+            <template v-else>
+              <div class="view-toggle">
+                <button class="clear-btn" @click="switchToConfig">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13">
+                    <polyline points="15 18 9 12 15 6" />
+                  </svg>
+                  返回配置
+                </button>
+                <button class="clear-btn" @click="refreshTasks" :disabled="bal.tasksLoading">
+                  <svg :class="{ 'spin-icon': bal.tasksLoading }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13">
+                    <polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10" />
+                  </svg>
+                  刷新
+                </button>
+              </div>
+
+              <!-- Concurrency control -->
+              <div class="concurrency-control">
+                <label>并发度</label>
+                <input v-model.number="bal.concurrency" type="number" class="form-input" min="1" max="10" style="width: 70px" />
+                <button class="clear-btn" @click="setConcurrency">设置</button>
+              </div>
+
+              <!-- Empty state -->
+              <div v-if="bal.tasks.length === 0 && !bal.tasksLoading" class="empty-state">
+                暂无调度任务
+              </div>
+
+              <!-- Task list -->
+              <div v-for="task in bal.tasks" :key="task.id" class="task-card">
+                <div class="task-header" @click="toggleTaskDetail(task.id)">
+                  <span class="task-status" :class="task.status">
+                    <svg v-if="task.status === 'running'" class="spin-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+                      <path d="M21 12a9 9 0 11-6.219-8.56" />
+                    </svg>
+                    {{ { pending: '等待', running: '执行中', completed: '完成', cancelled: '已取消', failed: '失败' }[task.status] || task.status }}
+                  </span>
+                  <span class="task-id">{{ task.id }}</span>
+                  <span class="task-meta">{{ task.config.pd_addr }} | PT={{ task.config.peer_threshold }} LT={{ task.config.leader_threshold }}</span>
+                  <span class="task-expand">{{ bal.expandedTask === task.id ? '▾' : '▸' }}</span>
+                </div>
+
+                <!-- Progress bar -->
+                <div v-if="task.status === 'running' && task.total > 0" class="progress-bar">
+                  <div class="progress-fill" :style="{ width: (task.progress / task.total * 100) + '%' }"></div>
+                  <span class="progress-text">{{ task.progress }}/{{ task.total }}</span>
+                </div>
+
+                <div class="task-info">
+                  <span class="task-time">{{ formatTime(task.created_at) }}</span>
+                  <div class="task-actions">
+                    <button v-if="task.status === 'pending' || task.status === 'running'" class="cancel-btn" @click.stop="cancelTask(task.id)">取消</button>
+                    <button v-if="task.status === 'completed' || task.status === 'cancelled' || task.status === 'failed'" class="del-btn" @click.stop="deleteTask(task.id)">删除</button>
+                  </div>
+                </div>
+
+                <!-- Expanded detail -->
+                <div v-if="bal.expandedTask === task.id && task.results && task.results.length > 0" class="task-detail">
+                  <div class="result-table-wrap">
+                    <table class="dist-table">
+                      <thead>
+                        <tr><th>#</th><th>操作</th><th>Region</th><th>From</th><th>To</th><th>状态</th><th>耗时</th></tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="(r, i) in task.results" :key="i" :class="{ 'row-error': r.status === 'failed' }">
+                          <td>{{ i + 1 }}</td>
+                          <td>{{ r.operation.type }}</td>
+                          <td>{{ r.operation.region_id }}</td>
+                          <td>{{ r.operation.from_store || '-' }}</td>
+                          <td>{{ r.operation.to_store }}</td>
+                          <td>
+                            <span class="task-status" :class="r.status === 'success' ? 'completed' : r.status">{{ r.status }}</span>
+                          </td>
+                          <td>{{ r.duration || '-' }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div v-if="task.error" class="result-error" style="margin-top: 8px">{{ task.error }}</div>
+                </div>
+              </div>
+            </template>
+
+          </div>
+
         </div>
       </div>
     </transition>
@@ -197,7 +450,7 @@
 <script>
 import { mapState } from 'pinia'
 import { useClusterStore } from '../stores/cluster'
-import { tikvAPI } from '../services/api'
+import { tikvAPI, balancerAPI } from '../services/api'
 
 const PD_HISTORY_KEY = 'kv2graph_pd_history'
 const PD_HISTORY_MAX = 10
@@ -217,6 +470,7 @@ export default {
       activeTab: 'kv2graph',
       tabs: [
         { id: 'kv2graph', label: 'KV2Graph' },
+        { id: 'balancer', label: 'Region Balancer' },
       ],
       kv: {
         pdSource: 'cluster',
@@ -234,6 +488,25 @@ export default {
         resultJson: '',
         error: '',
       },
+      bal: {
+        pdSource: 'cluster',
+        clusterName: '',
+        customPD: '',
+        tiupVersion: 'v8.1.0',
+        peerThreshold: 3,
+        leaderThreshold: 2,
+        batchSize: 5,
+        concurrency: 1,
+        analyzing: false,
+        plan: null,
+        error: '',
+        view: 'config',
+        tasks: [],
+        tasksLoading: false,
+        expandedTask: null,
+        eventSource: null,
+      },
+      _balRefreshTimer: null,
       copied: false,
       showPDHistory: false,
       pdHistory: [],
@@ -258,9 +531,30 @@ export default {
       const rest = [...all].filter(k => !priority.includes(k))
       return [...priority.filter(k => all.has(k)), ...rest]
     },
+    balReady() {
+      if (this.bal.pdSource === 'cluster') return !!this.bal.clusterName
+      return !!this.bal.customPD.trim()
+    },
+  },
+  watch: {
+    activeTab(newVal, oldVal) {
+      if (newVal === 'balancer' && this.bal.view === 'queue') {
+        this.refreshTasks()
+        this.connectSSE()
+        this.startAutoRefresh()
+      }
+      if (oldVal === 'balancer') {
+        this.disconnectSSE()
+        this.stopAutoRefresh()
+      }
+    },
   },
   mounted() {
     this.pdHistory = this.loadPDHistory()
+  },
+  beforeUnmount() {
+    this.disconnectSSE()
+    this.stopAutoRefresh()
   },
   methods: {
     loadPDHistory() {
@@ -373,6 +667,161 @@ export default {
         this.copied = true
         setTimeout(() => { this.copied = false }, 2000)
       } catch {}
+    },
+    // --- Region Balancer methods ---
+    async analyzeCluster() {
+      if (!this.balReady) return
+      this.bal.analyzing = true
+      this.bal.error = ''
+      this.bal.plan = null
+      try {
+        const params = {
+          tiup_version: this.bal.tiupVersion,
+          peer_threshold: this.bal.peerThreshold,
+          leader_threshold: this.bal.leaderThreshold,
+        }
+        if (this.bal.pdSource === 'cluster') {
+          params.cluster_name = this.bal.clusterName
+        } else {
+          params.pd_addr = this.bal.customPD.trim()
+        }
+        const res = await balancerAPI.analyze(params)
+        this.bal.plan = res.data
+      } catch (e) {
+        this.bal.error = e.response?.data?.detail || e.message || '分析失败'
+      } finally {
+        this.bal.analyzing = false
+      }
+    },
+    async executePlan() {
+      if (!this.bal.plan) return
+      this.bal.error = ''
+      try {
+        const params = {
+          tiup_version: this.bal.tiupVersion,
+          peer_threshold: this.bal.peerThreshold,
+          leader_threshold: this.bal.leaderThreshold,
+          batch_size: this.bal.batchSize,
+          concurrency: this.bal.concurrency,
+        }
+        if (this.bal.pdSource === 'cluster') {
+          params.cluster_name = this.bal.clusterName
+        } else {
+          params.pd_addr = this.bal.customPD.trim()
+        }
+        await balancerAPI.createTask(params)
+        this.switchToQueue()
+      } catch (e) {
+        this.bal.error = e.response?.data?.detail || e.message || '创建任务失败'
+      }
+    },
+    async refreshTasks() {
+      this.bal.tasksLoading = true
+      try {
+        const res = await balancerAPI.listTasks()
+        this.bal.tasks = res.data || []
+      } catch (e) {
+        // silently ignore refresh errors
+      } finally {
+        this.bal.tasksLoading = false
+      }
+    },
+    async cancelTask(id) {
+      try {
+        await balancerAPI.cancelTask(id)
+        await this.refreshTasks()
+      } catch (e) {
+        this.bal.error = e.response?.data?.detail || e.message || '取消失败'
+      }
+    },
+    async deleteTask(id) {
+      try {
+        await balancerAPI.deleteTask(id)
+        if (this.bal.expandedTask === id) this.bal.expandedTask = null
+        await this.refreshTasks()
+      } catch (e) {
+        this.bal.error = e.response?.data?.detail || e.message || '删除失败'
+      }
+    },
+    async setConcurrency() {
+      try {
+        await balancerAPI.setConcurrency(this.bal.concurrency)
+      } catch (e) {
+        this.bal.error = e.response?.data?.detail || e.message || '设置并发度失败'
+      }
+    },
+    toggleTaskDetail(id) {
+      this.bal.expandedTask = this.bal.expandedTask === id ? null : id
+    },
+    connectSSE() {
+      this.disconnectSSE()
+      try {
+        const url = balancerAPI.eventsUrl()
+        this.bal.eventSource = new EventSource(url)
+        this.bal.eventSource.onmessage = (e) => {
+          try {
+            const event = JSON.parse(e.data)
+            if (event.type === 'task_update' || event.type === 'task_created' || event.type === 'task_deleted') {
+              this.refreshTasks()
+            }
+          } catch {}
+        }
+        this.bal.eventSource.onerror = () => {
+          this.disconnectSSE()
+          // auto-reconnect after 5s
+          setTimeout(() => {
+            if (this.activeTab === 'balancer' && this.bal.view === 'queue') {
+              this.connectSSE()
+            }
+          }, 5000)
+        }
+      } catch {}
+    },
+    disconnectSSE() {
+      if (this.bal.eventSource) {
+        this.bal.eventSource.close()
+        this.bal.eventSource = null
+      }
+    },
+    startAutoRefresh() {
+      this.stopAutoRefresh()
+      this._balRefreshTimer = setInterval(() => {
+        if (this.activeTab === 'balancer' && this.bal.view === 'queue') {
+          this.refreshTasks()
+        }
+      }, 3000)
+    },
+    stopAutoRefresh() {
+      if (this._balRefreshTimer) {
+        clearInterval(this._balRefreshTimer)
+        this._balRefreshTimer = null
+      }
+    },
+    switchToQueue() {
+      this.bal.view = 'queue'
+      this.refreshTasks()
+      this.connectSSE()
+      this.startAutoRefresh()
+    },
+    switchToConfig() {
+      this.bal.view = 'config'
+      this.disconnectSSE()
+      this.stopAutoRefresh()
+    },
+    formatDelta(v) {
+      if (v == null) return ''
+      return (v >= 0 ? '+' : '') + v.toFixed(2)
+    },
+    deltaClass(v) {
+      if (v == null) return ''
+      if (v > 3) return 'delta-high'
+      if (v < -3) return 'delta-low'
+      return 'delta-ok'
+    },
+    formatTime(t) {
+      if (!t) return ''
+      const d = new Date(t)
+      return d.toLocaleString('zh-CN', { hour12: false })
     },
   }
 }
@@ -797,6 +1246,278 @@ label {
 }
 .result-table tr:hover td {
   background: #2a2a3d;
+}
+
+/* --- Region Balancer styles --- */
+
+.bal-plan-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.bal-summary {
+  background: #181825;
+  border: 1px solid #313244;
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.bal-summary-ops {
+  color: #89b4fa;
+  font-weight: 600;
+}
+
+.bal-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bal-section-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #a6adc8;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.dist-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.dist-table th {
+  background: #181825;
+  color: #89b4fa;
+  font-weight: 600;
+  padding: 6px 10px;
+  text-align: right;
+  white-space: nowrap;
+  border-bottom: 1px solid #313244;
+}
+.dist-table th:first-child {
+  text-align: left;
+}
+.dist-table td {
+  padding: 4px 10px;
+  border-bottom: 1px solid #2a2a3d;
+  color: #cdd6f4;
+  text-align: right;
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 11px;
+}
+.dist-table td:first-child {
+  text-align: left;
+}
+.dist-table tr:last-child td {
+  border-bottom: none;
+}
+.dist-table tr:hover td {
+  background: #2a2a3d;
+}
+
+.delta-high { color: #f38ba8; }
+.delta-low { color: #89b4fa; }
+.delta-ok { color: #a6e3a1; }
+
+.ops-list {
+  max-height: 300px;
+  overflow-y: auto;
+  background: #181825;
+  border: 1px solid #313244;
+  border-radius: 6px;
+  padding: 8px;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+}
+
+.op-item {
+  display: flex;
+  gap: 8px;
+  padding: 2px 0;
+  color: #cdd6f4;
+}
+
+.op-index {
+  color: #6c7086;
+  min-width: 36px;
+}
+
+.op-type {
+  font-weight: 600;
+  min-width: 110px;
+}
+.op-peer { color: #89b4fa; }
+.op-leader { color: #a6e3a1; }
+
+/* Queue view */
+.view-toggle {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.concurrency-control {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+}
+.concurrency-control label {
+  font-weight: 600;
+  color: #a6adc8;
+}
+
+.empty-state {
+  text-align: center;
+  color: #6c7086;
+  font-size: 13px;
+  padding: 40px 0;
+}
+
+.task-card {
+  background: #181825;
+  border: 1px solid #313244;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.task-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.task-header:hover {
+  background: #1e1e30;
+}
+
+.task-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+.task-status.pending {
+  background: rgba(108, 112, 134, 0.2);
+  color: #6c7086;
+}
+.task-status.running {
+  background: rgba(137, 180, 250, 0.15);
+  color: #89b4fa;
+}
+.task-status.completed {
+  background: rgba(166, 227, 161, 0.15);
+  color: #a6e3a1;
+}
+.task-status.cancelled {
+  background: rgba(250, 179, 135, 0.15);
+  color: #fab387;
+}
+.task-status.failed {
+  background: rgba(243, 139, 168, 0.15);
+  color: #f38ba8;
+}
+
+.task-id {
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 11px;
+  color: #6c7086;
+}
+
+.task-meta {
+  font-size: 11px;
+  color: #a6adc8;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-expand {
+  color: #6c7086;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.progress-bar {
+  height: 20px;
+  background: #313244;
+  position: relative;
+  margin: 0 14px;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #89b4fa, #74c7ec);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.progress-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: #cdd6f4;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+}
+
+.task-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 14px 10px;
+}
+
+.task-time {
+  font-size: 11px;
+  color: #6c7086;
+}
+
+.task-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.del-btn {
+  background: none;
+  border: none;
+  color: #6c7086;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+.del-btn:hover {
+  color: #f38ba8;
+  background: rgba(243, 139, 168, 0.1);
+}
+
+.task-detail {
+  border-top: 1px solid #313244;
+  padding: 10px 14px;
+  max-height: 300px;
+  overflow-y: auto;
 }
 
 /* JSON pre */

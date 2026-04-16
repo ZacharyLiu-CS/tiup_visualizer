@@ -16,26 +16,28 @@ import (
 
 // Server holds all dependencies for HTTP handlers.
 type Server struct {
-	cfg     *AppConfig
-	auth    *AuthService
-	tiup    *TiUPService
-	tikv    *TiKVService
-	update  *UpdateService
-	execDir string
-	version string
-	mux     *http.ServeMux
+	cfg      *AppConfig
+	auth     *AuthService
+	tiup     *TiUPService
+	tikv     *TiKVService
+	update   *UpdateService
+	balancer *BalancerService
+	execDir  string
+	version  string
+	mux      *http.ServeMux
 }
 
 func NewServer(cfg *AppConfig, execDir string) *Server {
 	s := &Server{
-		cfg:     cfg,
-		auth:    NewAuthService(cfg),
-		tiup:    NewTiUPService(),
-		tikv:    NewTiKVService(),
-		update:  NewUpdateService(execDir),
-		execDir: execDir,
-		version: loadVersion(execDir),
-		mux:     http.NewServeMux(),
+		cfg:      cfg,
+		auth:     NewAuthService(cfg),
+		tiup:     NewTiUPService(),
+		tikv:     NewTiKVService(),
+		update:   NewUpdateService(execDir),
+		balancer: NewBalancerService(),
+		execDir:  execDir,
+		version:  loadVersion(execDir),
+		mux:      http.NewServeMux(),
 	}
 	slog.Info("Build version", "version", s.version)
 	s.registerRoutes()
@@ -80,6 +82,16 @@ func (s *Server) registerRoutes() {
 	// TiKV direct PD address routes (auth required)
 	s.mux.HandleFunc("GET "+prefix+"/tikv-direct/key", s.requireAuth(s.handleTiKVDirectGetKey))
 	s.mux.HandleFunc("GET "+prefix+"/tikv-direct/scan", s.requireAuth(s.handleTiKVDirectScan))
+
+	// Region Balancer routes (auth required)
+	s.mux.HandleFunc("POST "+prefix+"/balancer/analyze", s.requireAuth(s.handleBalancerAnalyze))
+	s.mux.HandleFunc("POST "+prefix+"/balancer/tasks", s.requireAuth(s.handleBalancerCreateTask))
+	s.mux.HandleFunc("GET "+prefix+"/balancer/tasks", s.requireAuth(s.handleBalancerListTasks))
+	s.mux.HandleFunc("GET "+prefix+"/balancer/tasks/{taskID}", s.requireAuth(s.handleBalancerGetTask))
+	s.mux.HandleFunc("POST "+prefix+"/balancer/tasks/{taskID}/cancel", s.requireAuth(s.handleBalancerCancelTask))
+	s.mux.HandleFunc("DELETE "+prefix+"/balancer/tasks/{taskID}", s.requireAuth(s.handleBalancerDeleteTask))
+	s.mux.HandleFunc("PUT "+prefix+"/balancer/concurrency", s.requireAuth(s.handleBalancerSetConcurrency))
+	s.mux.HandleFunc("GET "+prefix+"/balancer/events", s.requireAuth(s.handleBalancerSSE))
 
 	// WebSocket terminal (GET only, must be before catch-all)
 	s.mux.HandleFunc("GET /ws/terminal", s.handleTerminal)
@@ -694,4 +706,212 @@ func (s *Server) handleTiKVDirectScan(w http.ResponseWriter, r *http.Request) {
 		"total":   len(results),
 		"entries": results,
 	})
+}
+
+// --- Region Balancer ---
+
+func (s *Server) handleBalancerAnalyze(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		PDAddr          string `json:"pd_addr"`
+		ClusterName     string `json:"cluster_name"`
+		TiUPVersion     string `json:"tiup_version"`
+		PeerThreshold   int    `json:"peer_threshold"`
+		LeaderThreshold int    `json:"leader_threshold"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Resolve PD address
+	pdAddr := req.PDAddr
+	if pdAddr == "" && req.ClusterName != "" {
+		var err error
+		pdAddr, err = s.getClusterPDAddrs(req.ClusterName)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	if pdAddr == "" {
+		writeError(w, http.StatusBadRequest, "pd_addr or cluster_name is required")
+		return
+	}
+
+	tiupVersion := req.TiUPVersion
+	if tiupVersion == "" {
+		tiupVersion = "v8.1.0"
+	}
+	peerThreshold := req.PeerThreshold
+	if peerThreshold <= 0 {
+		peerThreshold = 3
+	}
+	leaderThreshold := req.LeaderThreshold
+	if leaderThreshold <= 0 {
+		leaderThreshold = 2
+	}
+
+	result, err := s.balancer.Analyze(pdAddr, tiupVersion, peerThreshold, leaderThreshold)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleBalancerCreateTask(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		PDAddr          string `json:"pd_addr"`
+		ClusterName     string `json:"cluster_name"`
+		TiUPVersion     string `json:"tiup_version"`
+		PeerThreshold   int    `json:"peer_threshold"`
+		LeaderThreshold int    `json:"leader_threshold"`
+		BatchSize       int    `json:"batch_size"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	pdAddr := req.PDAddr
+	if pdAddr == "" && req.ClusterName != "" {
+		var err error
+		pdAddr, err = s.getClusterPDAddrs(req.ClusterName)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	if pdAddr == "" {
+		writeError(w, http.StatusBadRequest, "pd_addr or cluster_name is required")
+		return
+	}
+
+	config := TaskConfig{
+		PDAddr:          pdAddr,
+		TiUPVersion:     req.TiUPVersion,
+		PeerThreshold:   req.PeerThreshold,
+		LeaderThreshold: req.LeaderThreshold,
+		BatchSize:       req.BatchSize,
+	}
+	if config.TiUPVersion == "" {
+		config.TiUPVersion = "v8.1.0"
+	}
+	if config.PeerThreshold <= 0 {
+		config.PeerThreshold = 3
+	}
+	if config.LeaderThreshold <= 0 {
+		config.LeaderThreshold = 2
+	}
+	if config.BatchSize <= 0 {
+		config.BatchSize = 5
+	}
+
+	taskID, err := s.balancer.CreateTask(config)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	task := s.balancer.GetTask(taskID)
+	writeJSON(w, http.StatusCreated, task)
+}
+
+func (s *Server) handleBalancerListTasks(w http.ResponseWriter, r *http.Request) {
+	tasks := s.balancer.ListTasks()
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"tasks": tasks,
+	})
+}
+
+func (s *Server) handleBalancerGetTask(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("taskID")
+	task := s.balancer.GetTask(taskID)
+	if task == nil {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, task)
+}
+
+func (s *Server) handleBalancerCancelTask(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("taskID")
+	if err := s.balancer.CancelTask(taskID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"message": "task cancelled", "id": taskID})
+}
+
+func (s *Server) handleBalancerDeleteTask(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("taskID")
+	if err := s.balancer.DeleteTask(taskID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"message": "task deleted", "id": taskID})
+}
+
+func (s *Server) handleBalancerSetConcurrency(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Concurrency int `json:"concurrency"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Concurrency < 1 {
+		req.Concurrency = 1
+	}
+	if req.Concurrency > 10 {
+		req.Concurrency = 10
+	}
+	s.balancer.SetConcurrency(req.Concurrency)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"message":     "concurrency updated",
+		"concurrency": req.Concurrency,
+	})
+}
+
+func (s *Server) handleBalancerSSE(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	ch := s.balancer.Subscribe()
+	defer s.balancer.Unsubscribe(ch)
+
+	// Send initial task list
+	tasks := s.balancer.ListTasks()
+	initData, _ := json.Marshal(map[string]interface{}{
+		"type": "init",
+		"data": map[string]interface{}{"tasks": tasks},
+	})
+	fmt.Fprintf(w, "data: %s\n\n", initData)
+	flusher.Flush()
+
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event, ok := <-ch:
+			if !ok {
+				return
+			}
+			data, err := json.Marshal(event)
+			if err != nil {
+				continue
+			}
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+	}
 }

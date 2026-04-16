@@ -95,6 +95,20 @@ export const tikvAPI = {
   },
 }
 
+export const balancerAPI = {
+  analyze: (params) => api.post('/balancer/analyze', params),
+  createTask: (params) => api.post('/balancer/tasks', params),
+  listTasks: () => api.get('/balancer/tasks'),
+  getTask: (id) => api.get(`/balancer/tasks/${id}`),
+  cancelTask: (id) => api.post(`/balancer/tasks/${id}/cancel`),
+  deleteTask: (id) => api.delete(`/balancer/tasks/${id}`),
+  setConcurrency: (n) => api.put('/balancer/concurrency', { concurrency: n }),
+  eventsUrl: () => {
+    const token = localStorage.getItem('auth_token')
+    return `${base}/api/v1/balancer/events?token=${encodeURIComponent(token || '')}`
+  },
+}
+
 export const updateAPI = {
   check: () => api.get('/update/check'),
   apply: () => api.post('/update/apply'),
