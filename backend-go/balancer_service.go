@@ -504,10 +504,12 @@ func (s *BalancerService) executeOperation(ctx context.Context, config TaskConfi
 		return OpResult{Operation: op, Status: "failed", Error: "unknown operation type"}
 	}
 
+	slog.Info("Balancer: executing operation", "type", op.Type, "region", op.RegionID, "command", cmdStr)
 	output, err := runTiUPCommand(ctx, cmdStr, 30*time.Second)
 	duration := time.Since(start).Round(time.Millisecond).String()
 
 	if err != nil {
+		slog.Error("Balancer: operation failed", "type", op.Type, "region", op.RegionID, "error", err, "output", strings.TrimSpace(output), "duration", duration)
 		return OpResult{
 			Operation: op,
 			Status:    "failed",
@@ -516,6 +518,7 @@ func (s *BalancerService) executeOperation(ctx context.Context, config TaskConfi
 		}
 	}
 
+	slog.Info("Balancer: operation succeeded", "type", op.Type, "region", op.RegionID, "duration", duration)
 	return OpResult{
 		Operation: op,
 		Status:    "success",
@@ -575,13 +578,24 @@ func (s *BalancerService) Analyze(pdAddr, tiupVersion string, peerThreshold, lea
 
 	// Fetch region data
 	cmdStr := fmt.Sprintf("tiup ctl:%s pd -u %s region", tiupVersion, pdAddr)
+	slog.Info("Balancer: fetching region data", "pd_addr", pdAddr, "tiup_version", tiupVersion, "command", cmdStr)
 	output, err := runTiUPCommand(context.Background(), cmdStr, 60*time.Second)
 	if err != nil {
+		slog.Error("Balancer: failed to fetch regions", "error", err, "output", balancerTruncate(output, 500))
 		return nil, fmt.Errorf("failed to fetch regions: %w (output: %s)", err, balancerTruncate(output, 200))
 	}
 
+	// tiup ctl may print banner/progress text before the JSON output.
+	// Extract the JSON portion by finding the first '{' character.
+	jsonOutput := extractJSON(output)
+	if jsonOutput == "" {
+		slog.Error("Balancer: no JSON found in tiup output", "output", balancerTruncate(output, 500))
+		return nil, fmt.Errorf("no JSON found in tiup ctl output, raw output: %s", balancerTruncate(output, 300))
+	}
+
 	var resp PDRegionResponse
-	if err := json.Unmarshal([]byte(output), &resp); err != nil {
+	if err := json.Unmarshal([]byte(jsonOutput), &resp); err != nil {
+		slog.Error("Balancer: failed to parse region JSON", "error", err, "output_prefix", balancerTruncate(jsonOutput, 200))
 		return nil, fmt.Errorf("failed to parse region JSON: %w", err)
 	}
 
@@ -985,4 +999,28 @@ func balancerTruncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// extractJSON finds the first JSON object in the string.
+// tiup ctl may print banner/info text before the actual JSON output.
+func extractJSON(s string) string {
+	start := strings.Index(s, "{")
+	if start < 0 {
+		return ""
+	}
+	// Find the matching closing brace by counting depth
+	depth := 0
+	for i := start; i < len(s); i++ {
+		switch s[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return s[start : i+1]
+			}
+		}
+	}
+	// If no matching brace found, return from first '{' to end
+	return s[start:]
 }

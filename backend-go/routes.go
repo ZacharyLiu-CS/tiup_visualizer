@@ -570,18 +570,23 @@ func (s *Server) handleTiKVGetKey(w http.ResponseWriter, r *http.Request) {
 		cf = "default"
 	}
 
+	slog.Info("KV2Graph: GetKey request", "cluster", clusterName, "key", key, "parse_type", parseType, "cf", cf, "user", r.Header.Get("X-Username"))
+
 	// Get PD addresses from cluster detail
 	pdAddrs, err := s.getClusterPDAddrs(clusterName)
 	if err != nil {
+		slog.Error("KV2Graph: GetKey failed to resolve PD", "cluster", clusterName, "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	result, err := s.tikv.GetKey(pdAddrs, cf, key, parseType)
 	if err != nil {
+		slog.Warn("KV2Graph: GetKey not found", "cluster", clusterName, "key", key, "error", err)
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
+	slog.Info("KV2Graph: GetKey success", "cluster", clusterName, "key", key)
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -615,11 +620,15 @@ func (s *Server) handleTiKVScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	slog.Info("KV2Graph: ScanPrefix request", "cluster", clusterName, "prefix", prefix, "limit", limit, "parse_type", parseType, "cf", cf, "user", r.Header.Get("X-Username"))
+
 	results, err := s.tikv.ScanPrefix(pdAddrs, cf, prefix, limit, parseType)
 	if err != nil {
+		slog.Error("KV2Graph: ScanPrefix failed", "cluster", clusterName, "prefix", prefix, "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	slog.Info("KV2Graph: ScanPrefix success", "cluster", clusterName, "prefix", prefix, "results", len(results))
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"total":   len(results),
 		"entries": results,
@@ -647,6 +656,8 @@ func (s *Server) handleTiKVDirectGetKey(w http.ResponseWriter, r *http.Request) 
 	parseType := r.URL.Query().Get("parse-type")
 	cf := r.URL.Query().Get("cf")
 
+	slog.Info("KV2Graph: DirectGetKey request", "pd", pd, "key", key, "parse_type", parseType, "cf", cf, "user", r.Header.Get("X-Username"))
+
 	if pd == "" {
 		writeError(w, http.StatusBadRequest, "missing required query parameter: pd")
 		return
@@ -664,9 +675,11 @@ func (s *Server) handleTiKVDirectGetKey(w http.ResponseWriter, r *http.Request) 
 
 	result, err := s.tikv.GetKey(pd, cf, key, parseType)
 	if err != nil {
+		slog.Warn("KV2Graph: DirectGetKey not found", "pd", pd, "key", key, "error", err)
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
+	slog.Info("KV2Graph: DirectGetKey success", "pd", pd, "key", key)
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -681,6 +694,8 @@ func (s *Server) handleTiKVDirectScan(w http.ResponseWriter, r *http.Request) {
 			limit = v
 		}
 	}
+
+	slog.Info("KV2Graph: DirectScan request", "pd", pd, "prefix", prefix, "limit", limit, "parse_type", parseType, "cf", cf, "user", r.Header.Get("X-Username"))
 
 	if pd == "" {
 		writeError(w, http.StatusBadRequest, "missing required query parameter: pd")
@@ -699,9 +714,11 @@ func (s *Server) handleTiKVDirectScan(w http.ResponseWriter, r *http.Request) {
 
 	results, err := s.tikv.ScanPrefix(pd, cf, prefix, limit, parseType)
 	if err != nil {
+		slog.Error("KV2Graph: DirectScan failed", "pd", pd, "prefix", prefix, "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	slog.Info("KV2Graph: DirectScan success", "pd", pd, "prefix", prefix, "results", len(results))
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"total":   len(results),
 		"entries": results,
@@ -751,11 +768,15 @@ func (s *Server) handleBalancerAnalyze(w http.ResponseWriter, r *http.Request) {
 		leaderThreshold = 2
 	}
 
+	slog.Info("Balancer: analyze request", "pd_addr", pdAddr, "cluster", req.ClusterName, "peer_threshold", peerThreshold, "leader_threshold", leaderThreshold, "user", r.Header.Get("X-Username"))
+
 	result, err := s.balancer.Analyze(pdAddr, tiupVersion, peerThreshold, leaderThreshold)
 	if err != nil {
+		slog.Error("Balancer: analyze failed", "pd_addr", pdAddr, "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	slog.Info("Balancer: analyze success", "pd_addr", pdAddr, "regions", result.TotalRegions, "stores", result.TotalStores, "peer_ops", result.PeerOps, "leader_ops", result.LeaderOps)
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -807,12 +828,16 @@ func (s *Server) handleBalancerCreateTask(w http.ResponseWriter, r *http.Request
 		config.BatchSize = 5
 	}
 
+	slog.Info("Balancer: create task request", "pd_addr", pdAddr, "cluster", req.ClusterName, "batch_size", config.BatchSize, "user", r.Header.Get("X-Username"))
+
 	taskID, err := s.balancer.CreateTask(config)
 	if err != nil {
+		slog.Error("Balancer: create task failed", "pd_addr", pdAddr, "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
+	slog.Info("Balancer: task created", "task_id", taskID, "pd_addr", pdAddr)
 	task := s.balancer.GetTask(taskID)
 	writeJSON(w, http.StatusCreated, task)
 }

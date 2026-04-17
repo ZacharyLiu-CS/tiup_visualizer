@@ -222,7 +222,27 @@
               <!-- Custom PD -->
               <div class="form-group" v-else>
                 <label>PD 地址</label>
-                <input v-model="bal.customPD" class="form-input" placeholder="10.0.0.1:2379,10.0.0.2:2379" />
+                <div class="pd-input-wrap">
+                  <input
+                    v-model="bal.customPD"
+                    class="form-input"
+                    placeholder="10.0.0.1:2379,10.0.0.2:2379"
+                    @focus="showBalPDHistory = balPdHistory.length > 0"
+                    @blur="hideBalPDHistoryDelayed"
+                    @input="showBalPDHistory = false"
+                  />
+                  <div v-if="showBalPDHistory" class="pd-history-dropdown">
+                    <div
+                      v-for="(h, i) in balPdHistory"
+                      :key="i"
+                      class="pd-history-item"
+                      @mousedown.prevent="selectBalPDHistory(h)"
+                    >
+                      <span class="pd-history-text">{{ h }}</span>
+                      <button class="pd-history-del" @mousedown.prevent.stop="removeBalPDHistory(i)" title="删除">×</button>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <!-- TiUP Version -->
@@ -453,6 +473,7 @@ import { useClusterStore } from '../stores/cluster'
 import { tikvAPI, balancerAPI } from '../services/api'
 
 const PD_HISTORY_KEY = 'kv2graph_pd_history'
+const BAL_PD_HISTORY_KEY = 'balancer_pd_history'
 const PD_HISTORY_MAX = 10
 const QUERY_TIMEOUT = 60000 // 60s
 
@@ -510,6 +531,8 @@ export default {
       copied: false,
       showPDHistory: false,
       pdHistory: [],
+      showBalPDHistory: false,
+      balPdHistory: [],
       _abortController: null,
     }
   },
@@ -551,6 +574,7 @@ export default {
   },
   mounted() {
     this.pdHistory = this.loadPDHistory()
+    this.balPdHistory = this.loadBalPDHistory()
   },
   beforeUnmount() {
     this.disconnectSSE()
@@ -581,6 +605,32 @@ export default {
     },
     hidePDHistoryDelayed() {
       setTimeout(() => { this.showPDHistory = false }, 150)
+    },
+    // --- Balancer PD History ---
+    loadBalPDHistory() {
+      try {
+        return JSON.parse(localStorage.getItem(BAL_PD_HISTORY_KEY) || '[]')
+      } catch { return [] }
+    },
+    saveBalPDHistory() {
+      localStorage.setItem(BAL_PD_HISTORY_KEY, JSON.stringify(this.balPdHistory))
+    },
+    addBalPDHistory(pd) {
+      const trimmed = pd.trim()
+      if (!trimmed) return
+      this.balPdHistory = [trimmed, ...this.balPdHistory.filter(h => h !== trimmed)].slice(0, PD_HISTORY_MAX)
+      this.saveBalPDHistory()
+    },
+    removeBalPDHistory(i) {
+      this.balPdHistory.splice(i, 1)
+      this.saveBalPDHistory()
+    },
+    selectBalPDHistory(h) {
+      this.bal.customPD = h
+      this.showBalPDHistory = false
+    },
+    hideBalPDHistoryDelayed() {
+      setTimeout(() => { this.showBalPDHistory = false }, 150)
     },
     async runKV2Graph() {
       if (!this.kvReady) return
@@ -674,6 +724,10 @@ export default {
       this.bal.analyzing = true
       this.bal.error = ''
       this.bal.plan = null
+      // Save PD history on use
+      if (this.bal.pdSource === 'custom') {
+        this.addBalPDHistory(this.bal.customPD)
+      }
       try {
         const params = {
           tiup_version: this.bal.tiupVersion,
