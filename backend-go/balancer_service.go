@@ -251,8 +251,6 @@ func (s *BalancerService) CreateTask(config TaskConfig) (string, error) {
 	if config.PDAddr == "" {
 		return "", fmt.Errorf("pd_addr is required")
 	}
-	// Ensure each PD address in the comma-separated list has http:// prefix for tiup ctl
-	config.PDAddr = normalizePDAddrs(config.PDAddr)
 	if config.TiUPVersion == "" {
 		config.TiUPVersion = "v8.1.0"
 	}
@@ -577,9 +575,6 @@ func (s *BalancerService) Analyze(pdAddr, tiupVersion string, peerThreshold, lea
 	if leaderThreshold < 0 {
 		leaderThreshold = 2
 	}
-
-	// Ensure each PD address in the comma-separated list has http:// prefix for tiup ctl
-	pdAddr = normalizePDAddrs(pdAddr)
 
 	// Fetch region data
 	cmdStr := fmt.Sprintf("tiup ctl:%s pd -u %s region", tiupVersion, pdAddr)
@@ -1011,22 +1006,6 @@ func balancerTruncate(s string, maxLen int) string {
 
 // extractJSON finds the first JSON object in the string.
 // tiup ctl may print banner/info text before the actual JSON output.
-// normalizePDAddrs ensures each address in a comma-separated PD address list
-// has an http:// prefix, as required by tiup ctl pd -u.
-// e.g. "10.0.0.1:2379,10.0.0.2:2379" -> "http://10.0.0.1:2379,http://10.0.0.2:2379"
-func normalizePDAddrs(pdAddr string) string {
-	parts := strings.Split(pdAddr, ",")
-	for i, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" && !strings.HasPrefix(part, "http://") && !strings.HasPrefix(part, "https://") {
-			parts[i] = "http://" + part
-		} else {
-			parts[i] = part
-		}
-	}
-	return strings.Join(parts, ",")
-}
-
 func extractJSON(s string) string {
 	start := strings.Index(s, "{")
 	if start < 0 {
