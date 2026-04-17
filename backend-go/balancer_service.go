@@ -1,43 +1,19 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"math"
 	"math/rand"
-	"os/exec"
 	"sort"
-	"strings"
 	"sync"
 	"time"
+
+	"region-balancer/pkg"
 )
 
-// --- Region/Peer types for JSON parsing from tiup ctl output ---
-
-type PDPeer struct {
-	ID       uint64 `json:"id"`
-	StoreID  uint64 `json:"store_id"`
-	RoleName string `json:"role_name"`
-}
-
-type PDRegion struct {
-	ID              uint64   `json:"id"`
-	StartKey        string   `json:"start_key"`
-	EndKey          string   `json:"end_key"`
-	Peers           []PDPeer `json:"peers"`
-	Leader          *PDPeer  `json:"leader"`
-	ApproximateSize int64    `json:"approximate_size"`
-}
-
-type PDRegionResponse struct {
-	Count   int        `json:"count"`
-	Regions []PDRegion `json:"regions"`
-}
-
-// --- Balance operation types ---
+// --- Balance operation types (API-facing, kept for frontend compat) ---
 
 type BalanceOpType string
 
@@ -96,28 +72,51 @@ type TaskConfig struct {
 	BatchSize       int    `json:"batch_size"`
 }
 
+// --- SSE per-operation status types ---
+
+type OpJSON struct {
+	Type      string `json:"type"`
+	RegionID  uint64 `json:"region_id"`
+	FromStore uint64 `json:"from_store,omitempty"`
+	ToStore   uint64 `json:"to_store"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+type BatchOpStatus struct {
+	Operation   OpJSON     `json:"operation"`
+	Status      string     `json:"status"` // "submitted", "in_progress", "completed", "failed"
+	CurrentStep int        `json:"current_step,omitempty"`
+	TotalSteps  int        `json:"total_steps,omitempty"`
+	StartedAt   *time.Time `json:"started_at,omitempty"`
+	Elapsed     string     `json:"elapsed,omitempty"`
+	Error       string     `json:"error,omitempty"`
+}
+
+type BalanceTask struct {
+	ID              string         `json:"id"`
+	Status          TaskStatus     `json:"status"`
+	Config          TaskConfig     `json:"config"`
+	Plan            *AnalyzeResult `json:"plan,omitempty"`
+	Progress        int            `json:"progress"`
+	Total           int            `json:"total"`
+	Results         []OpResult     `json:"results"`
+	Error           string         `json:"error,omitempty"`
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+	StartedAt       *time.Time     `json:"started_at,omitempty"`
+	FinishedAt      *time.Time     `json:"finished_at,omitempty"`
+	CurrentBatch    int            `json:"current_batch"`
+	TotalBatches    int            `json:"total_batches"`
+	BatchOperations []BatchOpStatus `json:"batch_operations"`
+
+	cancel context.CancelFunc `json:"-"`
+}
+
 type OpResult struct {
 	Operation BalanceOperation `json:"operation"`
 	Status    string           `json:"status"` // "success", "failed", "skipped"
 	Error     string           `json:"error,omitempty"`
 	Duration  string           `json:"duration,omitempty"`
-}
-
-type BalanceTask struct {
-	ID         string         `json:"id"`
-	Status     TaskStatus     `json:"status"`
-	Config     TaskConfig     `json:"config"`
-	Plan       *AnalyzeResult `json:"plan,omitempty"`
-	Progress   int            `json:"progress"`
-	Total      int            `json:"total"`
-	Results    []OpResult     `json:"results"`
-	Error      string         `json:"error,omitempty"`
-	CreatedAt  time.Time      `json:"created_at"`
-	UpdatedAt  time.Time      `json:"updated_at"`
-	StartedAt  *time.Time     `json:"started_at,omitempty"`
-	FinishedAt *time.Time     `json:"finished_at,omitempty"`
-
-	cancel context.CancelFunc `json:"-"`
 }
 
 // --- SSE event ---
@@ -373,7 +372,7 @@ func (s *BalancerService) DeleteTask(taskID string) error {
 	return nil
 }
 
-// --- Task Execution ---
+// --- Task Execution (custom loop with per-op SSE) ---
 
 func (s *BalancerService) executeTask(workerCtx context.Context, taskID string) {
 	s.mu.Lock()
@@ -405,53 +404,190 @@ func (s *BalancerService) executeTask(workerCtx context.Context, taskID string) 
 		batchSize = 5
 	}
 
-	totalOps := len(operations)
-	failed := false
+	// Create TiUPClient from config
+	client, err := pkg.NewTiUPClient(config.PDAddr, config.TiUPVersion, 60*time.Second)
+	if err != nil {
+		s.mu.Lock()
+		task.Status = TaskFailed
+		task.Error = fmt.Sprintf("failed to create TiUP client: %v", err)
+		finishTime := time.Now()
+		task.FinishedAt = &finishTime
+		task.UpdatedAt = finishTime
+		s.mu.Unlock()
+		s.broadcast(SSEEvent{Type: "task_update", Data: task})
+		slog.Error("Balancer: failed to create TiUP client", "task_id", taskID, "error", err)
+		return
+	}
 
-	for i := 0; i < totalOps; i += batchSize {
+	slog.Info("Balancer: fetching region data", "task_id", taskID, "pd_addr", config.PDAddr)
+
+	// Convert BalanceOperations to pkg.Operations for batching
+	pkgOps := make([]pkg.Operation, len(operations))
+	for i, op := range operations {
+		pkgOps[i] = balanceOpToPkgOp(op)
+	}
+
+	// Split into batches
+	batches := splitBalanceOpBatches(operations, batchSize)
+	pkgBatches := splitPkgOpBatches(pkgOps, batchSize)
+	totalBatches := len(batches)
+
+	s.mu.Lock()
+	task.TotalBatches = totalBatches
+	s.mu.Unlock()
+
+	for batchIdx := 0; batchIdx < totalBatches; batchIdx++ {
 		// Check cancellation
 		select {
 		case <-ctx.Done():
+			slog.Warn("Execution cancelled, finishing current progress", "task_id", taskID)
 			s.markTaskCancelled(task)
 			return
 		default:
 		}
 
-		end := i + batchSize
-		if end > totalOps {
-			end = totalOps
+		batch := batches[batchIdx]
+		pkgBatch := pkgBatches[batchIdx]
+		batchNum := batchIdx + 1
+
+		slog.Info(fmt.Sprintf("Executing batch %d/%d (%d operations)", batchNum, totalBatches, len(batch)), "task_id", taskID)
+
+		// Build initial BatchOpStatus for this batch
+		batchStatuses := make([]BatchOpStatus, len(batch))
+		for i, op := range batch {
+			batchStatuses[i] = BatchOpStatus{
+				Operation: balanceOpToOpJSON(op),
+				Status:    "submitted",
+			}
 		}
-		batch := operations[i:end]
 
-		batchNum := i/batchSize + 1
-		totalBatches := (totalOps + batchSize - 1) / batchSize
-		slog.Info(fmt.Sprintf("Task %s: executing batch %d/%d (%d ops)", taskID, batchNum, totalBatches, len(batch)))
+		s.mu.Lock()
+		task.CurrentBatch = batchNum
+		task.BatchOperations = batchStatuses
+		task.UpdatedAt = time.Now()
+		s.mu.Unlock()
 
-		for _, op := range batch {
+		// Step a: Submit each operation
+		for i, pkgOp := range pkgBatch {
 			select {
 			case <-ctx.Done():
+				slog.Warn("Execution cancelled, finishing current progress", "task_id", taskID)
 				s.markTaskCancelled(task)
 				return
 			default:
 			}
 
-			opResult := s.executeOperation(ctx, config, op)
+			submitErr := submitPkgOperation(ctx, client, pkgOp)
+			startTime := time.Now()
 
 			s.mu.Lock()
-			task.Results = append(task.Results, opResult)
-			task.Progress = len(task.Results)
+			if submitErr != nil {
+				batchStatuses[i].Status = "failed"
+				batchStatuses[i].Error = submitErr.Error()
+				slog.Error(fmt.Sprintf("  Failed to submit: %s", pkgOp.String()), "task_id", taskID, "error", submitErr)
+
+				task.Results = append(task.Results, OpResult{
+					Operation: batch[i],
+					Status:    "failed",
+					Error:     submitErr.Error(),
+				})
+				task.Progress = len(task.Results)
+			} else {
+				batchStatuses[i].Status = "submitted"
+				batchStatuses[i].StartedAt = &startTime
+				slog.Info(fmt.Sprintf("  Submitted: %s", pkgOp.String()), "task_id", taskID)
+			}
+			task.BatchOperations = batchStatuses
 			task.UpdatedAt = time.Now()
 			s.mu.Unlock()
-
-			if opResult.Status == "failed" {
-				slog.Warn("Operation failed", "task_id", taskID, "op", opResult.Operation.Type, "region", opResult.Operation.RegionID, "error", opResult.Error)
-			}
 
 			s.broadcast(SSEEvent{Type: "task_update", Data: task})
 		}
 
-		// Wait for batch completion by polling operator check
-		s.waitBatchCompletion(ctx, config, batch)
+		// Step c: Poll via operator show every 5 seconds until all complete
+		pendingByRegion := make(map[uint64]int) // regionID -> index in batch
+		for i, op := range pkgBatch {
+			if batchStatuses[i].Status == "submitted" {
+				pendingByRegion[op.RegionID] = i
+			}
+		}
+
+		ticker := time.NewTicker(5 * time.Second)
+		for len(pendingByRegion) > 0 {
+			select {
+			case <-ctx.Done():
+				ticker.Stop()
+				slog.Warn("Execution cancelled, finishing current progress", "task_id", taskID)
+				s.markTaskCancelled(task)
+				return
+			case <-ticker.C:
+			}
+
+			activeOps, pollErr := client.ShowOperatorsParsed(ctx)
+			if pollErr != nil {
+				slog.Warn("operator show failed, will retry", "task_id", taskID, "error", pollErr)
+				continue
+			}
+
+			// Build active region map
+			activeRegions := make(map[uint64]*pkg.OperatorStatus)
+			for idx := range activeOps {
+				activeRegions[activeOps[idx].RegionID] = &activeOps[idx]
+			}
+
+			// Check each pending op
+			for regionID, batchIdx := range pendingByRegion {
+				if status, active := activeRegions[regionID]; active {
+					// Still running - update progress
+					s.mu.Lock()
+					batchStatuses[batchIdx].Status = "in_progress"
+					batchStatuses[batchIdx].CurrentStep = status.CurrentStep
+					batchStatuses[batchIdx].TotalSteps = status.TotalSteps
+					if batchStatuses[batchIdx].StartedAt != nil {
+						batchStatuses[batchIdx].Elapsed = time.Since(*batchStatuses[batchIdx].StartedAt).Round(time.Millisecond).String()
+					}
+					task.BatchOperations = batchStatuses
+					task.UpdatedAt = time.Now()
+					s.mu.Unlock()
+
+					slog.Info(fmt.Sprintf("  In progress: %s (step %d/%d)", pkgBatch[batchIdx].String(), status.CurrentStep, status.TotalSteps), "task_id", taskID)
+				} else {
+					// No longer in operator show -> completed
+					s.mu.Lock()
+					batchStatuses[batchIdx].Status = "completed"
+					if batchStatuses[batchIdx].StartedAt != nil {
+						batchStatuses[batchIdx].Elapsed = time.Since(*batchStatuses[batchIdx].StartedAt).Round(time.Millisecond).String()
+					}
+					task.BatchOperations = batchStatuses
+					task.Results = append(task.Results, OpResult{
+						Operation: batch[batchIdx],
+						Status:    "success",
+						Duration:  batchStatuses[batchIdx].Elapsed,
+					})
+					task.Progress = len(task.Results)
+					task.UpdatedAt = time.Now()
+					s.mu.Unlock()
+
+					slog.Info(fmt.Sprintf("  Completed: %s", pkgBatch[batchIdx].String()), "task_id", taskID)
+					delete(pendingByRegion, regionID)
+				}
+			}
+
+			s.broadcast(SSEEvent{Type: "task_update", Data: task})
+		}
+		ticker.Stop()
+
+		// Batch summary
+		succeeded := 0
+		failed := 0
+		for _, bs := range batchStatuses {
+			if bs.Status == "completed" {
+				succeeded++
+			} else if bs.Status == "failed" {
+				failed++
+			}
+		}
+		slog.Info(fmt.Sprintf("Batch %d/%d complete: %d succeeded, %d failed", batchNum, totalBatches, succeeded, failed), "task_id", taskID)
 	}
 
 	// Finalize
@@ -459,18 +595,15 @@ func (s *BalancerService) executeTask(workerCtx context.Context, taskID string) 
 	finishTime := time.Now()
 	task.FinishedAt = &finishTime
 	task.UpdatedAt = finishTime
-	if failed {
-		task.Status = TaskFailed
-	} else {
-		task.Status = TaskCompleted
-	}
+	task.Status = TaskCompleted
 	// Check if any ops failed
 	for _, r := range task.Results {
 		if r.Status == "failed" {
-			task.Status = TaskCompleted // still completed, with some failures noted
+			// Still completed, with some failures noted
 			break
 		}
 	}
+	task.BatchOperations = nil // clear batch operations on finish
 	s.mu.Unlock()
 
 	s.broadcast(SSEEvent{Type: "task_update", Data: task})
@@ -489,78 +622,7 @@ func (s *BalancerService) markTaskCancelled(task *BalanceTask) {
 	s.broadcast(SSEEvent{Type: "task_update", Data: task})
 }
 
-func (s *BalancerService) executeOperation(ctx context.Context, config TaskConfig, op BalanceOperation) OpResult {
-	start := time.Now()
-
-	var cmdStr string
-	switch op.Type {
-	case OpTransferPeer:
-		cmdStr = fmt.Sprintf("tiup ctl:%s pd -u %s operator add transfer-peer %d %d %d",
-			config.TiUPVersion, config.PDAddr, op.RegionID, op.FromStore, op.ToStore)
-	case OpTransferLeader:
-		cmdStr = fmt.Sprintf("tiup ctl:%s pd -u %s operator add transfer-leader %d %d",
-			config.TiUPVersion, config.PDAddr, op.RegionID, op.ToStore)
-	default:
-		return OpResult{Operation: op, Status: "failed", Error: "unknown operation type"}
-	}
-
-	slog.Info("Balancer: executing operation", "type", op.Type, "region", op.RegionID, "command", cmdStr)
-	output, err := runTiUPCommand(ctx, cmdStr, 30*time.Second)
-	duration := time.Since(start).Round(time.Millisecond).String()
-
-	if err != nil {
-		slog.Error("Balancer: operation failed", "type", op.Type, "region", op.RegionID, "error", err, "output", strings.TrimSpace(output), "duration", duration)
-		return OpResult{
-			Operation: op,
-			Status:    "failed",
-			Error:     fmt.Sprintf("%v (output: %s)", err, strings.TrimSpace(output)),
-			Duration:  duration,
-		}
-	}
-
-	slog.Info("Balancer: operation succeeded", "type", op.Type, "region", op.RegionID, "duration", duration)
-	return OpResult{
-		Operation: op,
-		Status:    "success",
-		Duration:  duration,
-	}
-}
-
-func (s *BalancerService) waitBatchCompletion(ctx context.Context, config TaskConfig, batch []BalanceOperation) {
-	deadline := time.After(5 * time.Minute)
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	pending := make(map[uint64]bool)
-	for _, op := range batch {
-		pending[op.RegionID] = true
-	}
-
-	for len(pending) > 0 {
-		select {
-		case <-ctx.Done():
-			return
-		case <-deadline:
-			slog.Warn("Batch completion timeout, proceeding", "remaining", len(pending))
-			return
-		case <-ticker.C:
-			for regionID := range pending {
-				cmdStr := fmt.Sprintf("tiup ctl:%s pd -u %s operator check %d",
-					config.TiUPVersion, config.PDAddr, regionID)
-				output, err := runTiUPCommand(ctx, cmdStr, 15*time.Second)
-				if err != nil {
-					continue
-				}
-				output = strings.TrimSpace(output)
-				if output == "" {
-					delete(pending, regionID)
-				}
-			}
-		}
-	}
-}
-
-// --- Analyze (dry-run) ---
+// --- Analyze (dry-run) using pkg library ---
 
 func (s *BalancerService) Analyze(pdAddr, tiupVersion string, peerThreshold, leaderThreshold int) (*AnalyzeResult, error) {
 	if pdAddr == "" {
@@ -576,124 +638,94 @@ func (s *BalancerService) Analyze(pdAddr, tiupVersion string, peerThreshold, lea
 		leaderThreshold = 2
 	}
 
-	// Fetch region data
-	cmdStr := fmt.Sprintf("tiup ctl:%s pd -u %s region", tiupVersion, pdAddr)
-	slog.Info("Balancer: fetching region data", "pd_addr", pdAddr, "tiup_version", tiupVersion, "command", cmdStr)
-	output, err := runTiUPCommand(context.Background(), cmdStr, 60*time.Second)
+	slog.Info("Balancer: fetching region data", "pd_addr", pdAddr, "tiup_version", tiupVersion)
+
+	// Create TiUPClient and fetcher
+	client, err := pkg.NewTiUPClient(pdAddr, tiupVersion, 60*time.Second)
 	if err != nil {
-		slog.Error("Balancer: failed to fetch regions", "error", err, "output", balancerTruncate(output, 500))
-		return nil, fmt.Errorf("failed to fetch regions: %w (output: %s)", err, balancerTruncate(output, 200))
+		return nil, fmt.Errorf("failed to create TiUP client: %w", err)
 	}
+	fetcher := pkg.NewTiUPFetcher(client)
 
-	// tiup ctl may print banner/progress text before the JSON output.
-	// Extract the JSON portion by finding the first '{' character.
-	jsonOutput := extractJSON(output)
-	if jsonOutput == "" {
-		slog.Error("Balancer: no JSON found in tiup output", "output", balancerTruncate(output, 500))
-		return nil, fmt.Errorf("no JSON found in tiup ctl output, raw output: %s", balancerTruncate(output, 300))
+	// Fetch regions
+	resp, err := fetcher.FetchRegions(context.Background())
+	if err != nil {
+		slog.Error("Balancer: failed to fetch regions", "error", err)
+		return nil, fmt.Errorf("failed to fetch regions: %w", err)
 	}
-
-	var resp PDRegionResponse
-	if err := json.Unmarshal([]byte(jsonOutput), &resp); err != nil {
-		slog.Error("Balancer: failed to parse region JSON", "error", err, "output_prefix", balancerTruncate(jsonOutput, 200))
-		return nil, fmt.Errorf("failed to parse region JSON: %w", err)
-	}
-
 	if len(resp.Regions) == 0 {
 		return nil, fmt.Errorf("no regions found")
 	}
 
-	// Compute before-stats
-	beforeStats := computeDistribution(resp.Regions)
-	numStores := len(beforeStats)
-	if numStores == 0 {
-		return nil, fmt.Errorf("no stores found")
+	// Plan using pkg.Planner
+	planner := pkg.NewPlanner(pkg.PlannerConfig{
+		PeerThreshold:   peerThreshold,
+		LeaderThreshold: leaderThreshold,
+	})
+	plan, err := planner.Plan(resp.Regions)
+	if err != nil {
+		return nil, fmt.Errorf("failed to plan: %w", err)
 	}
 
-	totalPeers := 0
-	totalLeaders := 0
-	for _, st := range beforeStats {
-		totalPeers += st.PeerCount
-		totalLeaders += st.LeaderCount
+	// Also get distribution report for before/after stats
+	beforeReport := pkg.AnalyzeDistribution(resp.Regions)
+
+	// Convert to AnalyzeResult for frontend compatibility
+	return convertToAnalyzeResult(plan, beforeReport), nil
+}
+
+// --- Conversion helpers ---
+
+// convertToAnalyzeResult converts pkg types to the frontend-compatible AnalyzeResult.
+func convertToAnalyzeResult(plan *pkg.BalancePlan, beforeReport *pkg.DistributionReport) *AnalyzeResult {
+	numStores := beforeReport.TotalStores
+	idealPeers := beforeReport.IdealPeers
+	idealLeaders := beforeReport.IdealLeaders
+
+	// Build before distribution
+	beforeDist := convertStoreStatsToDist(plan.BeforeStats, idealPeers, idealLeaders)
+
+	// Build after distribution
+	afterDist := convertStoreStatsToDist(plan.AfterStats, idealPeers, idealLeaders)
+
+	// Convert operations
+	var ops []BalanceOperation
+	peerOps := 0
+	leaderOps := 0
+	for _, op := range plan.Operations {
+		bop := pkgOpToBalanceOp(op)
+		ops = append(ops, bop)
+		switch op.Type {
+		case pkg.TransferPeer:
+			peerOps++
+		case pkg.TransferLeader:
+			leaderOps++
+		}
 	}
-	idealPeers := float64(totalPeers) / float64(numStores)
-	idealLeaders := float64(totalLeaders) / float64(numStores)
-
-	// Fill deltas
-	beforeDist := makeDistSlice(beforeStats, idealPeers, idealLeaders)
-
-	// Deep copy regions for mutation
-	workRegions := deepCopyPDRegions(resp.Regions)
-
-	// Phase 1: balance peers
-	peerOps := balancePeers(workRegions, beforeStats, idealPeers, float64(peerThreshold))
-
-	// Phase 2: balance leaders
-	leaderOps := balanceLeaders(workRegions, idealLeaders, float64(leaderThreshold))
-
-	allOps := append(peerOps, leaderOps...)
-	if allOps == nil {
-		allOps = []BalanceOperation{}
+	if ops == nil {
+		ops = []BalanceOperation{}
 	}
-
-	// Compute after-stats
-	afterStats := computeDistribution(workRegions)
-	afterDist := makeDistSlice(afterStats, idealPeers, idealLeaders)
 
 	return &AnalyzeResult{
-		TotalRegions: len(resp.Regions),
+		TotalRegions: beforeReport.TotalRegions,
 		TotalStores:  numStores,
-		TotalPeers:   totalPeers,
-		TotalLeaders: totalLeaders,
+		TotalPeers:   beforeReport.TotalPeers,
+		TotalLeaders: beforeReport.TotalLeaders,
 		IdealPeers:   math.Round(idealPeers*100) / 100,
 		IdealLeaders: math.Round(idealLeaders*100) / 100,
 		Before:       beforeDist,
 		After:        afterDist,
-		Operations:   allOps,
-		PeerOps:      len(peerOps),
-		LeaderOps:    len(leaderOps),
-	}, nil
-}
-
-// --- Balance Algorithm ---
-
-type storeStats struct {
-	storeID     uint64
-	PeerCount   int
-	LeaderCount int
-}
-
-func computeDistribution(regions []PDRegion) map[uint64]*storeStats {
-	stats := make(map[uint64]*storeStats)
-	for _, region := range regions {
-		for _, peer := range region.Peers {
-			if peer.RoleName != "Voter" && peer.RoleName != "" {
-				continue
-			}
-			st, ok := stats[peer.StoreID]
-			if !ok {
-				st = &storeStats{storeID: peer.StoreID}
-				stats[peer.StoreID] = st
-			}
-			st.PeerCount++
-		}
-		if region.Leader != nil {
-			st, ok := stats[region.Leader.StoreID]
-			if !ok {
-				st = &storeStats{storeID: region.Leader.StoreID}
-				stats[region.Leader.StoreID] = st
-			}
-			st.LeaderCount++
-		}
+		Operations:   ops,
+		PeerOps:      peerOps,
+		LeaderOps:    leaderOps,
 	}
-	return stats
 }
 
-func makeDistSlice(stats map[uint64]*storeStats, idealPeers, idealLeaders float64) []StoreDistribution {
+func convertStoreStatsToDist(stats map[uint64]*pkg.StoreStats, idealPeers, idealLeaders float64) []StoreDistribution {
 	dist := make([]StoreDistribution, 0, len(stats))
 	for _, st := range stats {
 		dist = append(dist, StoreDistribution{
-			StoreID:     st.storeID,
+			StoreID:     st.StoreID,
 			PeerCount:   st.PeerCount,
 			LeaderCount: st.LeaderCount,
 			PeerDelta:   math.Round((float64(st.PeerCount)-idealPeers)*100) / 100,
@@ -704,326 +736,96 @@ func makeDistSlice(stats map[uint64]*storeStats, idealPeers, idealLeaders float6
 	return dist
 }
 
-func balancePeers(regions []PDRegion, stats map[uint64]*storeStats, ideal, threshold float64) []BalanceOperation {
-	storePeerCount := make(map[uint64]int)
-	for id, st := range stats {
-		storePeerCount[id] = st.PeerCount
+func pkgOpToBalanceOp(op pkg.Operation) BalanceOperation {
+	var opType BalanceOpType
+	switch op.Type {
+	case pkg.TransferPeer:
+		opType = OpTransferPeer
+	case pkg.TransferLeader:
+		opType = OpTransferLeader
+	default:
+		opType = BalanceOpType(op.Type.String())
 	}
-
-	storeRegionIdx := buildPDStoreRegionIndex(regions)
-	var ops []BalanceOperation
-
-	totalPeers := 0
-	for _, c := range storePeerCount {
-		totalPeers += c
-	}
-
-	for iter := 0; iter < totalPeers; iter++ {
-		overloaded, underloaded := classifyPDStores(storePeerCount, ideal, threshold)
-		if len(overloaded) == 0 || len(underloaded) == 0 {
-			break
-		}
-
-		moved := false
-		for _, src := range overloaded {
-			if moved {
-				break
-			}
-			for _, dst := range underloaded {
-				regionID, ok := findPDRegionToTransferPeer(regions, storeRegionIdx, src, dst)
-				if !ok {
-					continue
-				}
-				ops = append(ops, BalanceOperation{
-					Type:      OpTransferPeer,
-					RegionID:  regionID,
-					FromStore: src,
-					ToStore:   dst,
-					Reason:    fmt.Sprintf("move peer from store %d (%d peers) to store %d (%d peers)", src, storePeerCount[src], dst, storePeerCount[dst]),
-				})
-				transferPDPeerInRegions(regions, regionID, src, dst)
-				storeRegionIdx[src].remove(regionID)
-				if storeRegionIdx[dst] == nil {
-					storeRegionIdx[dst] = newPDRegionSet()
-				}
-				storeRegionIdx[dst].add(regionID)
-				storePeerCount[src]--
-				storePeerCount[dst]++
-				moved = true
-				break
-			}
-		}
-		if !moved {
-			break
-		}
-	}
-	return ops
-}
-
-func balanceLeaders(regions []PDRegion, ideal, threshold float64) []BalanceOperation {
-	stats := computeDistribution(regions)
-	storeLeaderCount := make(map[uint64]int)
-	for id, st := range stats {
-		storeLeaderCount[id] = st.LeaderCount
-	}
-
-	var ops []BalanceOperation
-	totalLeaders := 0
-	for _, c := range storeLeaderCount {
-		totalLeaders += c
-	}
-
-	for iter := 0; iter < totalLeaders; iter++ {
-		overloaded, underloaded := classifyPDStores(storeLeaderCount, ideal, threshold)
-		if len(overloaded) == 0 || len(underloaded) == 0 {
-			break
-		}
-
-		moved := false
-		for _, src := range overloaded {
-			if moved {
-				break
-			}
-			for _, dst := range underloaded {
-				regionID, ok := findPDRegionToTransferLeader(regions, src, dst)
-				if !ok {
-					continue
-				}
-				ops = append(ops, BalanceOperation{
-					Type:     OpTransferLeader,
-					RegionID: regionID,
-					ToStore:  dst,
-					Reason:   fmt.Sprintf("move leader from store %d (%d leaders) to store %d (%d leaders)", src, storeLeaderCount[src], dst, storeLeaderCount[dst]),
-				})
-				transferPDLeaderInRegions(regions, regionID, dst)
-				storeLeaderCount[src]--
-				storeLeaderCount[dst]++
-				moved = true
-				break
-			}
-		}
-		if !moved {
-			break
-		}
-	}
-	return ops
-}
-
-func classifyPDStores(storeCounts map[uint64]int, ideal, threshold float64) (overloaded, underloaded []uint64) {
-	for storeID, count := range storeCounts {
-		diff := float64(count) - ideal
-		if diff > threshold {
-			overloaded = append(overloaded, storeID)
-		} else if diff < -threshold {
-			underloaded = append(underloaded, storeID)
-		}
-	}
-	sort.Slice(overloaded, func(i, j int) bool {
-		return storeCounts[overloaded[i]] > storeCounts[overloaded[j]]
-	})
-	sort.Slice(underloaded, func(i, j int) bool {
-		return storeCounts[underloaded[i]] < storeCounts[underloaded[j]]
-	})
-	return
-}
-
-func findPDRegionToTransferPeer(regions []PDRegion, storeRegionIdx map[uint64]*pdRegionSet, src, dst uint64) (uint64, bool) {
-	srcSet := storeRegionIdx[src]
-	if srcSet == nil {
-		return 0, false
-	}
-
-	type candidate struct {
-		regionID uint64
-		isLeader bool
-		size     int64
-	}
-	var candidates []candidate
-
-	for _, region := range regions {
-		if !srcSet.has(region.ID) {
-			continue
-		}
-		hasDst := false
-		for _, peer := range region.Peers {
-			if peer.StoreID == dst {
-				hasDst = true
-				break
-			}
-		}
-		if hasDst {
-			continue
-		}
-		isLeader := region.Leader != nil && region.Leader.StoreID == src
-		candidates = append(candidates, candidate{regionID: region.ID, isLeader: isLeader, size: region.ApproximateSize})
-	}
-	if len(candidates) == 0 {
-		return 0, false
-	}
-	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].isLeader != candidates[j].isLeader {
-			return !candidates[i].isLeader
-		}
-		return candidates[i].size < candidates[j].size
-	})
-	return candidates[0].regionID, true
-}
-
-func findPDRegionToTransferLeader(regions []PDRegion, src, dst uint64) (uint64, bool) {
-	for _, region := range regions {
-		if region.Leader == nil || region.Leader.StoreID != src {
-			continue
-		}
-		for _, peer := range region.Peers {
-			if peer.StoreID == dst {
-				return region.ID, true
-			}
-		}
-	}
-	return 0, false
-}
-
-func transferPDPeerInRegions(regions []PDRegion, regionID, fromStore, toStore uint64) {
-	for i := range regions {
-		if regions[i].ID != regionID {
-			continue
-		}
-		for j := range regions[i].Peers {
-			if regions[i].Peers[j].StoreID == fromStore {
-				regions[i].Peers[j].StoreID = toStore
-				regions[i].Peers[j].ID = 0
-				break
-			}
-		}
-		if regions[i].Leader != nil && regions[i].Leader.StoreID == fromStore {
-			regions[i].Leader.StoreID = toStore
-			regions[i].Leader.ID = 0
-		}
-		break
+	return BalanceOperation{
+		Type:      opType,
+		RegionID:  op.RegionID,
+		FromStore: op.FromStore,
+		ToStore:   op.ToStore,
+		Reason:    op.Reason,
 	}
 }
 
-func transferPDLeaderInRegions(regions []PDRegion, regionID, toStore uint64) {
-	for i := range regions {
-		if regions[i].ID != regionID {
-			continue
+func balanceOpToPkgOp(op BalanceOperation) pkg.Operation {
+	var opType pkg.OperationType
+	switch op.Type {
+	case OpTransferPeer:
+		opType = pkg.TransferPeer
+	case OpTransferLeader:
+		opType = pkg.TransferLeader
+	}
+	return pkg.Operation{
+		Type:      opType,
+		RegionID:  op.RegionID,
+		FromStore: op.FromStore,
+		ToStore:   op.ToStore,
+		Reason:    op.Reason,
+	}
+}
+
+func balanceOpToOpJSON(op BalanceOperation) OpJSON {
+	return OpJSON{
+		Type:      string(op.Type),
+		RegionID:  op.RegionID,
+		FromStore: op.FromStore,
+		ToStore:   op.ToStore,
+		Reason:    op.Reason,
+	}
+}
+
+func submitPkgOperation(ctx context.Context, client *pkg.TiUPClient, op pkg.Operation) error {
+	switch op.Type {
+	case pkg.TransferPeer:
+		_, err := client.RunOperator(ctx, "add", "transfer-peer",
+			fmt.Sprintf("%d", op.RegionID),
+			fmt.Sprintf("%d", op.FromStore),
+			fmt.Sprintf("%d", op.ToStore))
+		return err
+	case pkg.TransferLeader:
+		_, err := client.RunOperator(ctx, "add", "transfer-leader",
+			fmt.Sprintf("%d", op.RegionID),
+			fmt.Sprintf("%d", op.ToStore))
+		return err
+	default:
+		return fmt.Errorf("unknown operation type: %v", op.Type)
+	}
+}
+
+func splitBalanceOpBatches(ops []BalanceOperation, batchSize int) [][]BalanceOperation {
+	if batchSize <= 0 {
+		batchSize = 1
+	}
+	var batches [][]BalanceOperation
+	for i := 0; i < len(ops); i += batchSize {
+		end := i + batchSize
+		if end > len(ops) {
+			end = len(ops)
 		}
-		for j := range regions[i].Peers {
-			if regions[i].Peers[j].StoreID == toStore {
-				regions[i].Leader = &PDPeer{
-					ID:       regions[i].Peers[j].ID,
-					StoreID:  toStore,
-					RoleName: "Voter",
-				}
-				break
-			}
+		batches = append(batches, ops[i:end])
+	}
+	return batches
+}
+
+func splitPkgOpBatches(ops []pkg.Operation, batchSize int) [][]pkg.Operation {
+	if batchSize <= 0 {
+		batchSize = 1
+	}
+	var batches [][]pkg.Operation
+	for i := 0; i < len(ops); i += batchSize {
+		end := i + batchSize
+		if end > len(ops) {
+			end = len(ops)
 		}
-		break
+		batches = append(batches, ops[i:end])
 	}
-}
-
-func deepCopyPDRegions(regions []PDRegion) []PDRegion {
-	cp := make([]PDRegion, len(regions))
-	for i, r := range regions {
-		cp[i] = PDRegion{
-			ID:              r.ID,
-			StartKey:        r.StartKey,
-			EndKey:          r.EndKey,
-			ApproximateSize: r.ApproximateSize,
-		}
-		cp[i].Peers = make([]PDPeer, len(r.Peers))
-		copy(cp[i].Peers, r.Peers)
-		if r.Leader != nil {
-			leaderCopy := *r.Leader
-			cp[i].Leader = &leaderCopy
-		}
-	}
-	return cp
-}
-
-// --- Region set helper ---
-
-type pdRegionSet struct {
-	m map[uint64]struct{}
-}
-
-func newPDRegionSet() *pdRegionSet {
-	return &pdRegionSet{m: make(map[uint64]struct{})}
-}
-
-func (s *pdRegionSet) add(id uint64)    { s.m[id] = struct{}{} }
-func (s *pdRegionSet) remove(id uint64) { delete(s.m, id) }
-func (s *pdRegionSet) has(id uint64) bool {
-	_, ok := s.m[id]
-	return ok
-}
-
-func buildPDStoreRegionIndex(regions []PDRegion) map[uint64]*pdRegionSet {
-	index := make(map[uint64]*pdRegionSet)
-	for _, region := range regions {
-		for _, peer := range region.Peers {
-			rs, ok := index[peer.StoreID]
-			if !ok {
-				rs = newPDRegionSet()
-				index[peer.StoreID] = rs
-			}
-			rs.add(region.ID)
-		}
-	}
-	return index
-}
-
-// --- Command execution helper ---
-
-func runTiUPCommand(ctx context.Context, cmdStr string, timeout time.Duration) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	parts := strings.Fields(cmdStr)
-	if len(parts) == 0 {
-		return "", fmt.Errorf("empty command")
-	}
-
-	cmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	if err != nil {
-		// stderr from tiup often contains non-error progress info; include stdout too
-		return stdout.String() + stderr.String(), err
-	}
-	return stdout.String(), nil
-}
-
-func balancerTruncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
-}
-
-// extractJSON finds the first JSON object in the string.
-// tiup ctl may print banner/info text before the actual JSON output.
-func extractJSON(s string) string {
-	start := strings.Index(s, "{")
-	if start < 0 {
-		return ""
-	}
-	// Find the matching closing brace by counting depth
-	depth := 0
-	for i := start; i < len(s); i++ {
-		switch s[i] {
-		case '{':
-			depth++
-		case '}':
-			depth--
-			if depth == 0 {
-				return s[start : i+1]
-			}
-		}
-	}
-	// If no matching brace found, return from first '{' to end
-	return s[start:]
+	return batches
 }

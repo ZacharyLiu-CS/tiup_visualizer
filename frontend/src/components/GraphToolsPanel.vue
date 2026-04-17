@@ -414,15 +414,36 @@
                     </svg>
                     {{ { pending: '等待', running: '执行中', completed: '完成', cancelled: '已取消', failed: '失败' }[task.status] || task.status }}
                   </span>
+                  <span v-if="(task.status === 'running' || task.status === 'completed' || task.status === 'failed') && task.started_at" class="task-elapsed">已运行 {{ taskElapsed(task) }}</span>
                   <span class="task-id">{{ task.id }}</span>
                   <span class="task-meta">{{ task.config?.pd_addr }} | PT={{ task.config?.peer_threshold }} LT={{ task.config?.leader_threshold }}</span>
                   <span class="task-expand">{{ bal.expandedTask === task.id ? '▾' : '▸' }}</span>
+                </div>
+
+                <!-- Batch progress -->
+                <div v-if="task.status === 'running' && task.total_batches > 0" class="batch-info">
+                  批次 {{ task.current_batch }}/{{ task.total_batches }}
                 </div>
 
                 <!-- Progress bar -->
                 <div v-if="task.status === 'running' && task.total > 0" class="progress-bar">
                   <div class="progress-fill" :style="{ width: (task.progress / task.total * 100) + '%' }"></div>
                   <span class="progress-text">{{ task.progress }}/{{ task.total }}</span>
+                </div>
+
+                <!-- Live batch operations -->
+                <div v-if="task.status === 'running' && task.batch_operations && task.batch_operations.length > 0" class="batch-ops-live">
+                  <div v-for="bop in task.batch_operations" :key="bop.operation.region_id" class="batch-op-row">
+                    <span class="op-status-icon" :class="bop.status">
+                      <svg v-if="bop.status === 'in_progress'" class="spin-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M21 12a9 9 0 11-6.219-8.56" /></svg>
+                      <svg v-else-if="bop.status === 'completed'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><polyline points="20 6 9 17 4 12" /></svg>
+                      <svg v-else-if="bop.status === 'failed'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                      <span v-else class="dot-icon">&#9679;</span>
+                    </span>
+                    <span class="op-desc">{{ bop.operation.type }} region={{ bop.operation.region_id }} store:{{ bop.operation.from_store || '' }}-&gt;{{ bop.operation.to_store }}</span>
+                    <span v-if="bop.status === 'in_progress' && bop.total_steps" class="op-step">(step {{ bop.current_step }}/{{ bop.total_steps }})</span>
+                    <span class="op-elapsed">{{ bop.elapsed || '' }}</span>
+                  </div>
                 </div>
 
                 <div class="task-info">
@@ -529,6 +550,8 @@ export default {
         eventSource: null,
       },
       _balRefreshTimer: null,
+      _elapsedTimer: null,
+      elapsedTick: 0,
       copied: false,
       showPDHistory: false,
       pdHistory: [],
@@ -566,10 +589,12 @@ export default {
         this.refreshTasks()
         this.connectSSE()
         this.startAutoRefresh()
+        this.startElapsedTimer()
       }
       if (oldVal === 'balancer') {
         this.disconnectSSE()
         this.stopAutoRefresh()
+        this.stopElapsedTimer()
       }
     },
   },
@@ -580,6 +605,7 @@ export default {
   beforeUnmount() {
     this.disconnectSSE()
     this.stopAutoRefresh()
+    this.stopElapsedTimer()
   },
   methods: {
     loadPDHistory() {
@@ -818,8 +844,20 @@ export default {
         this.bal.eventSource.onmessage = (e) => {
           try {
             const event = JSON.parse(e.data)
-            if (event.type === 'task_update' || event.type === 'task_created' || event.type === 'task_deleted') {
-              this.refreshTasks()
+            if (event.type === 'init') {
+              const tasks = event.data?.tasks || []
+              this.bal.tasks = tasks
+            } else if (event.type === 'task_update' || event.type === 'task_created') {
+              const taskData = event.data
+              const idx = this.bal.tasks.findIndex(t => t.id === taskData.id)
+              if (idx >= 0) {
+                this.bal.tasks[idx] = taskData
+              } else {
+                this.bal.tasks.unshift(taskData)
+              }
+            } else if (event.type === 'task_deleted') {
+              const id = event.data?.id
+              this.bal.tasks = this.bal.tasks.filter(t => t.id !== id)
             }
           } catch {}
         }
@@ -846,7 +884,7 @@ export default {
         if (this.activeTab === 'balancer' && this.bal.view === 'queue') {
           this.refreshTasks()
         }
-      }, 3000)
+      }, 10000)
     },
     stopAutoRefresh() {
       if (this._balRefreshTimer) {
@@ -859,11 +897,25 @@ export default {
       this.refreshTasks()
       this.connectSSE()
       this.startAutoRefresh()
+      this.startElapsedTimer()
     },
     switchToConfig() {
       this.bal.view = 'config'
       this.disconnectSSE()
       this.stopAutoRefresh()
+      this.stopElapsedTimer()
+    },
+    startElapsedTimer() {
+      this.stopElapsedTimer()
+      this._elapsedTimer = setInterval(() => {
+        this.elapsedTick++
+      }, 1000)
+    },
+    stopElapsedTimer() {
+      if (this._elapsedTimer) {
+        clearInterval(this._elapsedTimer)
+        this._elapsedTimer = null
+      }
     },
     formatDelta(v) {
       if (v == null) return ''
@@ -879,6 +931,17 @@ export default {
       if (!t) return ''
       const d = new Date(t)
       return d.toLocaleString('zh-CN', { hour12: false })
+    },
+    taskElapsed(task) {
+      void this.elapsedTick  // reactive dependency for running tasks
+      if (!task.started_at) return ''
+      const start = new Date(task.started_at).getTime()
+      const end = task.finished_at ? new Date(task.finished_at).getTime() : Date.now()
+      const diff = Math.max(0, Math.floor((end - start) / 1000))
+      const m = Math.floor(diff / 60)
+      const s = diff % 60
+      if (m > 0) return `${m}m ${s}s`
+      return `${s}s`
     },
   }
 }
@@ -1568,6 +1631,83 @@ label {
 .del-btn:hover {
   color: #f38ba8;
   background: rgba(243, 139, 168, 0.1);
+}
+
+.task-elapsed {
+  font-size: 11px;
+  color: #a6adc8;
+  white-space: nowrap;
+}
+
+.batch-info {
+  font-size: 11px;
+  color: #6c7086;
+  padding: 2px 14px 0;
+  font-weight: 600;
+}
+
+.batch-ops-live {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 14px;
+  background: rgba(49, 50, 68, 0.4);
+  border-top: 1px solid #313244;
+}
+
+.batch-op-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  padding: 2px 0;
+}
+
+.op-status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  flex-shrink: 0;
+}
+.op-status-icon.submitted {
+  color: #6c7086;
+}
+.op-status-icon .dot-icon {
+  font-size: 6px;
+  color: #6c7086;
+}
+.op-status-icon.in_progress {
+  color: #89b4fa;
+}
+.op-status-icon.completed {
+  color: #a6e3a1;
+}
+.op-status-icon.failed {
+  color: #f38ba8;
+}
+
+.op-desc {
+  flex: 1;
+  color: #cdd6f4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.op-step {
+  color: #6c7086;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.op-elapsed {
+  color: #a6adc8;
+  font-size: 10px;
+  white-space: nowrap;
+  min-width: 48px;
+  text-align: right;
 }
 
 .task-detail {

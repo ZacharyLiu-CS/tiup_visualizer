@@ -9,6 +9,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gopkg.in/yaml.v3 v3.0.1
+	region-balancer v0.0.0
 )
 
 require (
@@ -60,3 +61,5 @@ require (
 replace github.com/pingcap/kvproto => git.woa.com/EasyGraph/tikv/kvproto v0.0.0-20260129084637-f0e4604caffc
 
 replace github.com/tikv/client-go/v2 => git.woa.com/EasyGraph/tikv/client-go/v2 v2.0.0-20260129085532-b510867b7301
+
+replace region-balancer => /data/home/zacharyzliu/tikv-related-projects/region-balancer
