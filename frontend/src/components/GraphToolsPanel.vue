@@ -302,7 +302,7 @@
                 <div class="bal-summary">
                   <span>{{ bal.plan.total_regions }} regions / {{ bal.plan.total_stores }} stores</span>
                   <span class="bal-summary-ops">
-                    {{ bal.plan.peer_ops }} peer transfers + {{ bal.plan.leader_ops }} leader transfers = {{ bal.plan.operations.length }} total
+                    {{ bal.plan.peer_ops }} peer transfers + {{ bal.plan.leader_ops }} leader transfers = {{ (bal.plan.operations || []).length }} total
                   </span>
                 </div>
 
@@ -350,8 +350,9 @@
 
                 <!-- Operations list -->
                 <div class="bal-section">
-                  <div class="bal-section-title">调度操作 ({{ bal.plan.operations.length }})</div>
-                  <div class="ops-list">
+                  <div class="bal-section-title">调度操作 ({{ (bal.plan.operations || []).length }})</div>
+                  <div v-if="!bal.plan.operations || bal.plan.operations.length === 0" class="result-empty">集群已均衡，无需调度操作</div>
+                  <div v-else class="ops-list">
                     <div v-for="(op, i) in bal.plan.operations" :key="i" class="op-item">
                       <span class="op-index">[{{ i + 1 }}]</span>
                       <span class="op-type" :class="op.type === 'transfer-peer' ? 'op-peer' : 'op-leader'">{{ op.type }}</span>
@@ -364,7 +365,7 @@
 
                 <!-- Execute button -->
                 <div class="form-actions">
-                  <button class="run-btn" @click="executePlan" :disabled="!bal.plan || bal.plan.operations.length === 0">
+                  <button class="run-btn" @click="executePlan" :disabled="!bal.plan || !bal.plan.operations || bal.plan.operations.length === 0">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
                       <polygon points="5 3 19 12 5 21 5 3" />
                     </svg>

@@ -251,6 +251,10 @@ func (s *BalancerService) CreateTask(config TaskConfig) (string, error) {
 	if config.PDAddr == "" {
 		return "", fmt.Errorf("pd_addr is required")
 	}
+	// Ensure http:// prefix for tiup ctl
+	if !strings.HasPrefix(config.PDAddr, "http://") && !strings.HasPrefix(config.PDAddr, "https://") {
+		config.PDAddr = "http://" + config.PDAddr
+	}
 	if config.TiUPVersion == "" {
 		config.TiUPVersion = "v8.1.0"
 	}
@@ -576,6 +580,11 @@ func (s *BalancerService) Analyze(pdAddr, tiupVersion string, peerThreshold, lea
 		leaderThreshold = 2
 	}
 
+	// Ensure PD address has http:// prefix for tiup ctl
+	if !strings.HasPrefix(pdAddr, "http://") && !strings.HasPrefix(pdAddr, "https://") {
+		pdAddr = "http://" + pdAddr
+	}
+
 	// Fetch region data
 	cmdStr := fmt.Sprintf("tiup ctl:%s pd -u %s region", tiupVersion, pdAddr)
 	slog.Info("Balancer: fetching region data", "pd_addr", pdAddr, "tiup_version", tiupVersion, "command", cmdStr)
@@ -632,6 +641,9 @@ func (s *BalancerService) Analyze(pdAddr, tiupVersion string, peerThreshold, lea
 	leaderOps := balanceLeaders(workRegions, idealLeaders, float64(leaderThreshold))
 
 	allOps := append(peerOps, leaderOps...)
+	if allOps == nil {
+		allOps = []BalanceOperation{}
+	}
 
 	// Compute after-stats
 	afterStats := computeDistribution(workRegions)
