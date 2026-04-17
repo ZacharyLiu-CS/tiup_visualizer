@@ -415,7 +415,7 @@
                     {{ { pending: '等待', running: '执行中', completed: '完成', cancelled: '已取消', failed: '失败' }[task.status] || task.status }}
                   </span>
                   <span class="task-id">{{ task.id }}</span>
-                  <span class="task-meta">{{ task.config.pd_addr }} | PT={{ task.config.peer_threshold }} LT={{ task.config.leader_threshold }}</span>
+                  <span class="task-meta">{{ task.config?.pd_addr }} | PT={{ task.config?.peer_threshold }} LT={{ task.config?.leader_threshold }}</span>
                   <span class="task-expand">{{ bal.expandedTask === task.id ? '▾' : '▸' }}</span>
                 </div>
 
@@ -774,7 +774,9 @@ export default {
       this.bal.tasksLoading = true
       try {
         const res = await balancerAPI.listTasks()
-        this.bal.tasks = res.data || []
+        // Backend returns { tasks: [...] }
+        const data = res.data
+        this.bal.tasks = Array.isArray(data) ? data : (Array.isArray(data?.tasks) ? data.tasks : [])
       } catch (e) {
         // silently ignore refresh errors
       } finally {
