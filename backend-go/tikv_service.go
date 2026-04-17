@@ -195,12 +195,13 @@ func (s *TiKVService) ScanPrefix(pdAddr, cf, prefix string, limit int, parseType
 
 // ExtractPDAddrs extracts PD addresses from cluster components.
 // Returns a comma-separated string of PD host:port pairs.
+// Uses comp.ID (e.g. "9.135.148.20:22379") which includes the port,
+// not comp.Host (e.g. "9.135.148.20") which is IP only.
 func ExtractPDAddrs(detail *ClusterDetail) string {
 	var addrs []string
 	for _, comp := range detail.Components {
 		if comp.Role == "pd" {
-			// PD component host format: "11.154.160.246:17379"
-			addrs = append(addrs, comp.Host)
+			addrs = append(addrs, comp.ID)
 		}
 	}
 	return joinStrings(addrs, ",")
