@@ -62,4 +62,4 @@ replace github.com/pingcap/kvproto => git.woa.com/EasyGraph/tikv/kvproto v0.0.0-
 
 replace github.com/tikv/client-go/v2 => git.woa.com/EasyGraph/tikv/client-go/v2 v2.0.0-20260129085532-b510867b7301
 
-replace region-balancer => /data/home/zacharyzliu/tikv-related-projects/region-balancer
+replace region-balancer => git.woa.com/zacharyzliu/region-balancer v0.0.0-20260417090857-354f516c6508

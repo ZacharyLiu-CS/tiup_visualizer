@@ -5,6 +5,8 @@ git.woa.com/EasyGraph/tikv/kvproto v0.0.0-20260129084637-f0e4604caffc h1:BzZOHyX
 git.woa.com/EasyGraph/tikv/kvproto v0.0.0-20260129084637-f0e4604caffc/go.mod h1:rXxWk2UnwfUhLXha1jxRWPADw9eMZGWEWCg92Tgmb/8=
 git.woa.com/zacharyzliu/KV2Graph v0.1.0 h1:LjJAY8KFCkCWn7FYVVQjg9K0Sb7/ogv0ssvLLtoc9xA=
 git.woa.com/zacharyzliu/KV2Graph v0.1.0/go.mod h1:Sm75F23ENAzLxWSG4Xb3FRrtxb9sdExdpu/cZHkd74o=
+git.woa.com/zacharyzliu/region-balancer v0.0.0-20260417090857-354f516c6508 h1:uGKP4a0oXMvShhEZVmsCgz3rsyFpU0mozK479MyG5Cg=
+git.woa.com/zacharyzliu/region-balancer v0.0.0-20260417090857-354f516c6508/go.mod h1:cevvnc/PSbNNdptPXNKYI5LnzM99wwGnYbFZ713V6wE=
 github.com/BurntSushi/toml v0.3.1 h1:WXkYYl6Yr3qBf1K79EBnL4mak0OimBfB0XUf9Vl28OQ=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
 github.com/benbjohnson/clock v1.1.0/go.mod h1:J11/hYXuz8f4ySSvYwY0FKfm+ezbsZBKZxNJlLklBHA=
