@@ -144,7 +144,7 @@ func NewBalancerService() *BalancerService {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &BalancerService{
 		tasks:       make(map[string]*BalanceTask),
-		concurrency: 1,
+		concurrency: 5,
 		taskCh:      make(chan string, 256),
 		sseClients:  make(map[chan SSEEvent]bool),
 		workerCtx:   ctx,
@@ -339,13 +339,12 @@ func (s *BalancerService) CancelTask(taskID string) error {
 		task.cancel()
 	}
 	task.Status = TaskCancelled
-	now := time.Now()
-	task.UpdatedAt = now
-	task.FinishedAt = &now
+	task.UpdatedAt = time.Now()
+	// NOTE: FinishedAt is NOT set here — it will be set after in-progress ops drain
 	s.mu.Unlock()
 
 	s.broadcast(SSEEvent{Type: "task_update", Data: task})
-	slog.Info("Balance task cancelled", "task_id", taskID)
+	slog.Info("Balance task cancelled, draining in-progress operations", "task_id", taskID)
 	return nil
 }
 
@@ -436,14 +435,17 @@ func (s *BalancerService) executeTask(workerCtx context.Context, taskID string) 
 	task.TotalBatches = totalBatches
 	s.mu.Unlock()
 
+	cancelled := false
 	for batchIdx := 0; batchIdx < totalBatches; batchIdx++ {
-		// Check cancellation
+		// Check cancellation before starting a new batch
 		select {
 		case <-ctx.Done():
-			slog.Warn("Execution cancelled, finishing current progress", "task_id", taskID)
-			s.markTaskCancelled(task)
-			return
+			cancelled = true
 		default:
+		}
+		if cancelled {
+			slog.Warn("Execution cancelled, skipping remaining batches", "task_id", taskID, "skipped_from_batch", batchIdx+1)
+			break
 		}
 
 		batch := batches[batchIdx]
@@ -467,17 +469,36 @@ func (s *BalancerService) executeTask(workerCtx context.Context, taskID string) 
 		task.UpdatedAt = time.Now()
 		s.mu.Unlock()
 
-		// Step a: Submit each operation
+		// Step a: Submit each operation (use background ctx so cancel doesn't break submit)
 		for i, pkgOp := range pkgBatch {
+			// If cancelled mid-submit, stop submitting new ops but keep tracking submitted ones
 			select {
 			case <-ctx.Done():
-				slog.Warn("Execution cancelled, finishing current progress", "task_id", taskID)
-				s.markTaskCancelled(task)
-				return
+				cancelled = true
 			default:
 			}
+			if cancelled {
+				slog.Warn(fmt.Sprintf("  Skipped (cancelled): %s", pkgOp.String()), "task_id", taskID)
+				s.mu.Lock()
+				batchStatuses[i].Status = "failed"
+				batchStatuses[i].Error = "cancelled before submit"
+				task.Results = append(task.Results, OpResult{
+					Operation: batch[i],
+					Status:    "skipped",
+					Error:     "cancelled before submit",
+				})
+				task.Progress = len(task.Results)
+				task.BatchOperations = batchStatuses
+				task.UpdatedAt = time.Now()
+				s.mu.Unlock()
+				s.broadcast(SSEEvent{Type: "task_update", Data: task})
+				continue
+			}
 
-			submitErr := submitPkgOperation(ctx, client, pkgOp)
+			// Use background context for submit so it doesn't fail on cancel
+			submitCtx, submitCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			submitErr := submitPkgOperation(submitCtx, client, pkgOp)
+			submitCancel()
 			startTime := time.Now()
 
 			s.mu.Lock()
@@ -504,26 +525,33 @@ func (s *BalancerService) executeTask(workerCtx context.Context, taskID string) 
 			s.broadcast(SSEEvent{Type: "task_update", Data: task})
 		}
 
-		// Step c: Poll via operator show every 5 seconds until all complete
+		// Step c: Poll via operator show every 5 seconds until all submitted ops complete.
+		// Use a background context so polling continues even after task cancellation.
+		pollCtx, pollCancel := context.WithCancel(context.Background())
+		defer pollCancel()
+
 		pendingByRegion := make(map[uint64]int) // regionID -> index in batch
 		for i, op := range pkgBatch {
-			if batchStatuses[i].Status == "submitted" {
+			if batchStatuses[i].Status == "submitted" || batchStatuses[i].Status == "in_progress" {
 				pendingByRegion[op.RegionID] = i
 			}
 		}
 
 		ticker := time.NewTicker(5 * time.Second)
 		for len(pendingByRegion) > 0 {
+			<-ticker.C
+
+			// Check if cancelled during polling — note but keep polling
 			select {
 			case <-ctx.Done():
-				ticker.Stop()
-				slog.Warn("Execution cancelled, finishing current progress", "task_id", taskID)
-				s.markTaskCancelled(task)
-				return
-			case <-ticker.C:
+				if !cancelled {
+					cancelled = true
+					slog.Warn("Execution cancelled, draining in-progress operations", "task_id", taskID, "pending", len(pendingByRegion))
+				}
+			default:
 			}
 
-			activeOps, pollErr := client.ShowOperatorsParsed(ctx)
+			activeOps, pollErr := client.ShowOperatorsParsed(pollCtx)
 			if pollErr != nil {
 				slog.Warn("operator show failed, will retry", "task_id", taskID, "error", pollErr)
 				continue
@@ -576,6 +604,7 @@ func (s *BalancerService) executeTask(workerCtx context.Context, taskID string) 
 			s.broadcast(SSEEvent{Type: "task_update", Data: task})
 		}
 		ticker.Stop()
+		pollCancel()
 
 		// Batch summary
 		succeeded := 0
@@ -595,31 +624,16 @@ func (s *BalancerService) executeTask(workerCtx context.Context, taskID string) 
 	finishTime := time.Now()
 	task.FinishedAt = &finishTime
 	task.UpdatedAt = finishTime
-	task.Status = TaskCompleted
-	// Check if any ops failed
-	for _, r := range task.Results {
-		if r.Status == "failed" {
-			// Still completed, with some failures noted
-			break
-		}
+	if cancelled {
+		task.Status = TaskCancelled
+	} else {
+		task.Status = TaskCompleted
 	}
 	task.BatchOperations = nil // clear batch operations on finish
 	s.mu.Unlock()
 
 	s.broadcast(SSEEvent{Type: "task_update", Data: task})
 	slog.Info("Balance task finished", "task_id", taskID, "status", task.Status, "progress", task.Progress, "total", task.Total)
-}
-
-func (s *BalancerService) markTaskCancelled(task *BalanceTask) {
-	s.mu.Lock()
-	if task.Status == TaskRunning {
-		task.Status = TaskCancelled
-		now := time.Now()
-		task.FinishedAt = &now
-		task.UpdatedAt = now
-	}
-	s.mu.Unlock()
-	s.broadcast(SSEEvent{Type: "task_update", Data: task})
 }
 
 // --- Analyze (dry-run) using pkg library ---
