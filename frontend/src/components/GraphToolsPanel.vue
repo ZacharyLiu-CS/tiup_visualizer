@@ -431,21 +431,6 @@
                   <span class="progress-text">{{ task.progress }}/{{ task.total }}</span>
                 </div>
 
-                <!-- Live batch operations -->
-                <div v-if="task.status === 'running' && task.batch_operations && task.batch_operations.length > 0" class="batch-ops-live">
-                  <div v-for="bop in task.batch_operations" :key="bop.operation.region_id" class="batch-op-row">
-                    <span class="op-status-icon" :class="bop.status">
-                      <svg v-if="bop.status === 'in_progress'" class="spin-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M21 12a9 9 0 11-6.219-8.56" /></svg>
-                      <svg v-else-if="bop.status === 'completed'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><polyline points="20 6 9 17 4 12" /></svg>
-                      <svg v-else-if="bop.status === 'failed'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
-                      <span v-else class="dot-icon">&#9679;</span>
-                    </span>
-                    <span class="op-desc">{{ bop.operation.type }} region={{ bop.operation.region_id }} store:{{ bop.operation.from_store || '' }}-&gt;{{ bop.operation.to_store }}</span>
-                    <span v-if="bop.status === 'in_progress' && bop.total_steps" class="op-step">(step {{ bop.current_step }}/{{ bop.total_steps }})</span>
-                    <span class="op-elapsed">{{ bop.elapsed || '' }}</span>
-                  </div>
-                </div>
-
                 <div class="task-info">
                   <span class="task-time">{{ formatTime(task.created_at) }}</span>
                   <div class="task-actions">
@@ -454,24 +439,28 @@
                   </div>
                 </div>
 
-                <!-- Expanded detail -->
-                <div v-if="bal.expandedTask === task.id && task.results && task.results.length > 0" class="task-detail">
+                <!-- Unified operations table (always visible when expanded or running) -->
+                <div v-if="mergedOps(task).length > 0" class="task-detail">
                   <div class="result-table-wrap">
                     <table class="dist-table">
                       <thead>
                         <tr><th>#</th><th>操作</th><th>Region</th><th>From</th><th>To</th><th>状态</th><th>耗时</th></tr>
                       </thead>
                       <tbody>
-                        <tr v-for="(r, i) in task.results" :key="i" :class="{ 'row-error': r.status === 'failed' }">
+                        <tr v-for="(r, i) in mergedOps(task)" :key="r._key" :class="{ 'row-error': r.status === 'failed', 'row-progress': r.status === 'in_progress' || r.status === 'submitted' }">
                           <td>{{ i + 1 }}</td>
-                          <td>{{ r.operation.type }}</td>
-                          <td>{{ r.operation.region_id }}</td>
-                          <td>{{ r.operation.from_store || '-' }}</td>
-                          <td>{{ r.operation.to_store }}</td>
+                          <td>{{ r.type }}</td>
+                          <td>{{ r.region_id }}</td>
+                          <td>{{ r.from_store || '-' }}</td>
+                          <td>{{ r.to_store }}</td>
                           <td>
-                            <span class="task-status" :class="r.status === 'success' ? 'completed' : r.status">{{ r.status }}</span>
+                            <span class="op-status-inline" :class="r.status">
+                              <svg v-if="r.status === 'in_progress'" class="spin-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="11" height="11"><path d="M21 12a9 9 0 11-6.219-8.56" /></svg>
+                              {{ { success: 'success', completed: 'success', in_progress: 'running', submitted: 'pending', failed: 'failed' }[r.status] || r.status }}
+                              <span v-if="r.status === 'in_progress' && r.total_steps" class="op-step-inline">({{ r.current_step }}/{{ r.total_steps }})</span>
+                            </span>
                           </td>
-                          <td>{{ r.duration || '-' }}</td>
+                          <td>{{ r.elapsed || r.duration || '-' }}</td>
                         </tr>
                       </tbody>
                     </table>
@@ -943,6 +932,47 @@ export default {
       if (m > 0) return `${m}m ${s}s`
       return `${s}s`
     },
+    mergedOps(task) {
+      const rows = []
+      // 1. Completed results from previous batches
+      const completedRegions = new Set()
+      if (task.results && task.results.length > 0) {
+        for (const r of task.results) {
+          completedRegions.add(r.operation.region_id)
+          rows.push({
+            _key: 'r-' + r.operation.region_id + '-' + rows.length,
+            type: r.operation.type,
+            region_id: r.operation.region_id,
+            from_store: r.operation.from_store,
+            to_store: r.operation.to_store,
+            status: r.status,
+            duration: r.duration,
+            elapsed: null,
+            current_step: 0,
+            total_steps: 0,
+          })
+        }
+      }
+      // 2. Current batch operations (in_progress/submitted, skip already in results)
+      if (task.batch_operations && task.batch_operations.length > 0) {
+        for (const bop of task.batch_operations) {
+          if (completedRegions.has(bop.operation.region_id)) continue
+          rows.push({
+            _key: 'b-' + bop.operation.region_id,
+            type: bop.operation.type,
+            region_id: bop.operation.region_id,
+            from_store: bop.operation.from_store,
+            to_store: bop.operation.to_store,
+            status: bop.status,
+            duration: null,
+            elapsed: bop.elapsed,
+            current_step: bop.current_step,
+            total_steps: bop.total_steps,
+          })
+        }
+      }
+      return rows
+    },
   }
 }
 </script>
@@ -1230,10 +1260,29 @@ label {
 }
 
 /* Row error highlight */
-.result-table tr.row-error td {
+.result-table tr.row-error td,
+.dist-table tr.row-error td {
   color: #fab387;
   background: rgba(250, 179, 135, 0.06);
 }
+
+.dist-table tr.row-progress td {
+  color: #89b4fa;
+  background: rgba(137, 180, 250, 0.06);
+}
+
+.op-status-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 500;
+}
+.op-status-inline.success, .op-status-inline.completed { color: #a6e3a1; }
+.op-status-inline.in_progress { color: #89b4fa; }
+.op-status-inline.submitted { color: #9399b2; }
+.op-status-inline.failed { color: #f38ba8; }
+.op-step-inline { font-size: 10px; opacity: 0.8; }
 
 /* PD history dropdown */
 .pd-input-wrap {
