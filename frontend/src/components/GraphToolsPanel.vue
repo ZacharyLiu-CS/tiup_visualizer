@@ -528,7 +528,7 @@ export default {
         peerThreshold: 3,
         leaderThreshold: 2,
         batchSize: 5,
-        concurrency: 1,
+        concurrency: 5,
         analyzing: false,
         plan: null,
         error: '',
