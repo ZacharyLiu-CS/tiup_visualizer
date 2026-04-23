@@ -22,6 +22,7 @@ type Server struct {
 	tikv     *TiKVService
 	update   *UpdateService
 	balancer *BalancerService
+	pdctl    *PDCtlService
 	execDir  string
 	version  string
 	mux      *http.ServeMux
@@ -35,6 +36,7 @@ func NewServer(cfg *AppConfig, execDir string) *Server {
 		tikv:     NewTiKVService(),
 		update:   NewUpdateService(execDir),
 		balancer: NewBalancerService(),
+		pdctl:    NewPDCtlService(),
 		execDir:  execDir,
 		version:  loadVersion(execDir),
 		mux:      http.NewServeMux(),
@@ -92,6 +94,9 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("DELETE "+prefix+"/balancer/tasks/{taskID}", s.requireAuth(s.handleBalancerDeleteTask))
 	s.mux.HandleFunc("PUT "+prefix+"/balancer/concurrency", s.requireAuth(s.handleBalancerSetConcurrency))
 	s.mux.HandleFunc("GET "+prefix+"/balancer/events", s.requireAuth(s.handleBalancerSSE))
+
+	// PD Ctl routes (auth required)
+	s.mux.HandleFunc("POST "+prefix+"/pdctl/exec", s.requireAuth(s.handlePDCtlExec))
 
 	// WebSocket terminal (GET only, must be before catch-all)
 	s.mux.HandleFunc("GET /ws/terminal", s.handleTerminal)
@@ -358,6 +363,8 @@ func (s *Server) handleLogFile(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte(content))
 		} else {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%s", dlName))
+			w.Header().Set("X-Content-Type-Options", "nosniff")
 			w.Write([]byte(content))
 		}
 	}
@@ -387,11 +394,17 @@ func (s *Server) handleServerLogs(w http.ResponseWriter, r *http.Request) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".log") {
 			continue
 		}
+		// pd-ctl runs no longer write their own log file; hide any stale
+		// pdctl.log (and rotated siblings) left over from older versions.
+		name := entry.Name()
+		if name == "pdctl.log" || strings.HasPrefix(name, "pdctl-") || strings.HasPrefix(name, "pdctl.log.") {
+			continue
+		}
 		info, err := entry.Info()
 		if err != nil {
 			continue
 		}
-		files = append(files, fileInfo{Filename: entry.Name(), Size: info.Size()})
+		files = append(files, fileInfo{Filename: name, Size: info.Size()})
 	}
 
 	sort.Slice(files, func(i, j int) bool {
@@ -473,6 +486,10 @@ func serveLocalFile(w http.ResponseWriter, logPath, filename, action string) {
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		// Explicitly request inline display; some browsers will otherwise
+		// download files with a .log extension regardless of Content-Type.
+		w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%s", filename))
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Write(content)
 	}
 }
@@ -518,6 +535,8 @@ func serveLocalFileTail(w http.ResponseWriter, logPath, filename, action string,
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", dlName))
 	} else {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%s", filename))
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 	}
 	w.Write(buf)
 }
@@ -940,3 +959,79 @@ func (s *Server) handleBalancerSSE(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
+
+// --- PD Ctl ---
+
+func (s *Server) handlePDCtlExec(w http.ResponseWriter, r *http.Request) {
+	var req PDCtlExecRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Resolve PD address if cluster name is given
+	pdAddr := strings.TrimSpace(req.PDAddr)
+	if pdAddr == "" && strings.TrimSpace(req.ClusterName) != "" {
+		addr, err := s.getClusterPDAddrs(req.ClusterName)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		pdAddr = addr
+	}
+	if pdAddr == "" {
+		writeError(w, http.StatusBadRequest, "pd_addr or cluster_name is required")
+		return
+	}
+	req.PDAddr = pdAddr
+
+	// Limit command to a safe whitelist to avoid arbitrary shell injection through --flags.
+	allowedCommands := map[string]bool{
+		"":                     true, // allow empty (e.g. top-level --help)
+		"cluster":              true,
+		"completion":           true,
+		"config":               true,
+		"exit":                 true,
+		"health":               true,
+		"help":                 true,
+		"hot":                  true,
+		"keyspace":             true,
+		"keyspace-group":       true,
+		"label":                true,
+		"log":                  true,
+		"member":               true,
+		"min-resolved-ts":      true,
+		"operator":             true,
+		"ping":                 true,
+		"plugin":               true,
+		"region":               true,
+		"resource-manager":     true,
+		"scheduler":            true,
+		"service-gc-safepoint": true,
+		"store":                true,
+		"tso":                  true,
+		"unsafe":               true,
+	}
+	if !allowedCommands[strings.TrimSpace(req.Command)] {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("command %q is not allowed", req.Command))
+		return
+	}
+
+	slog.Info("PDCtl: exec request",
+		"pd_addr", pdAddr,
+		"cluster", req.ClusterName,
+		"command", req.Command,
+		"sub_command", req.SubCommand,
+		"help", req.Help,
+		"user", r.Header.Get("X-Username"),
+	)
+
+	result, err := s.pdctl.Execute(req)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	slog.Info("PDCtl: exec result", "command", result.Command, "exit_code", result.ExitCode, "duration_ms", result.DurationMs)
+	writeJSON(w, http.StatusOK, result)
+}
+

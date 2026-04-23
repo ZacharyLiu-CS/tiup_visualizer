@@ -109,6 +109,12 @@ export const balancerAPI = {
   },
 }
 
+export const pdctlAPI = {
+  // params: { pd_addr, cluster_name, tiup_version, command, sub_command, help }
+  // Returns { command, output, exit_code, duration_ms, error? }
+  exec: (params, signal) => api.post('/pdctl/exec', params, { signal, timeout: 65000 }),
+}
+
 export const updateAPI = {
   check: () => api.get('/update/check'),
   apply: () => api.post('/update/apply'),

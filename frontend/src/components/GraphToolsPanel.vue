@@ -34,6 +34,42 @@
               <p>基于 TiKV RawKV 的图元数据读取与解析工具，支持单点查询和前缀扫描。</p>
             </div>
 
+            <!-- Hex Key Range → Graph ID converter -->
+            <div class="hex-converter">
+              <label>Hex Key Range → Graph ID</label>
+              <div class="hex-converter-row">
+                <input
+                  v-model="kv.hexInput"
+                  class="form-input hex-input"
+                  placeholder="5A00000214000000FF08020000024D312EFF3139342E3137"
+                  spellcheck="false"
+                  autocomplete="off"
+                  @keyup.enter="convertHexToGraphId"
+                />
+                <button class="convert-btn" @click="convertHexToGraphId">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13">
+                    <polyline points="16 3 21 3 21 8" /><line x1="4" y1="20" x2="21" y2="3" />
+                    <polyline points="21 16 21 21 16 21" /><line x1="15" y1="15" x2="21" y2="21" />
+                    <line x1="4" y1="4" x2="9" y2="9" />
+                  </svg>
+                  Convert to Graph ID
+                </button>
+              </div>
+              <div class="hex-converter-hint">跳过首字节，取接下来的 4 字节作为 Graph ID（大端）。</div>
+              <div v-if="kv.hexGraphId !== ''" class="hex-converter-result">
+                <span class="hex-result-label">Graph ID:</span>
+                <code class="hex-result-id">{{ kv.hexGraphId }}</code>
+                <span class="hex-result-meta">(hex: {{ kv.hexGraphIdHex }})</span>
+                <button class="copy-btn hex-copy-btn" @click="copyGraphId" title="复制 Graph ID">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                  </svg>
+                  {{ hexCopied ? '已复制' : '复制' }}
+                </button>
+              </div>
+              <div v-if="kv.hexError" class="hex-converter-error">{{ kv.hexError }}</div>
+            </div>
+
             <!-- PD Source -->
             <div class="form-group">
               <label>PD 来源</label>
@@ -472,6 +508,165 @@
 
           </div>
 
+          <!-- PD Ctl tab -->
+          <div v-if="activeTab === 'pdctl'" class="tab-content">
+            <div class="tool-desc">
+              <p>执行 <code>tiup ctl:&lt;version&gt; pd --pd &lt;addr&gt; [command] [args]</code>。选择集群或自定义 PD 地址，选择子命令后运行。点击 <strong>Help</strong> 按钮可在当前命令后追加 <code>--help</code> 查看帮助。</p>
+            </div>
+
+            <!-- PD Source -->
+            <div class="form-group">
+              <label>PD 来源</label>
+              <div class="radio-group">
+                <label class="radio-label">
+                  <input type="radio" v-model="pdctl.pdSource" value="cluster" /> 选择集群
+                </label>
+                <label class="radio-label">
+                  <input type="radio" v-model="pdctl.pdSource" value="custom" /> 自定义 PD 地址
+                </label>
+              </div>
+            </div>
+
+            <!-- Cluster selector -->
+            <div class="form-group" v-if="pdctl.pdSource === 'cluster'">
+              <label>集群</label>
+              <select v-model="pdctl.clusterName" class="form-select">
+                <option value="">-- 选择集群 --</option>
+                <option v-for="c in clusters" :key="c.name" :value="c.name">{{ c.name }}</option>
+              </select>
+            </div>
+
+            <!-- Custom PD -->
+            <div class="form-group" v-else>
+              <label>PD 地址</label>
+              <div class="pd-input-wrap">
+                <input
+                  v-model="pdctl.customPD"
+                  class="form-input"
+                  placeholder="10.0.0.1:2379,10.0.0.2:2379"
+                  @focus="showPdctlPDHistory = pdctlPdHistory.length > 0"
+                  @blur="hidePdctlPDHistoryDelayed"
+                  @input="showPdctlPDHistory = false"
+                  @keyup.enter="runPdctl(false)"
+                />
+                <div v-if="showPdctlPDHistory" class="pd-history-dropdown">
+                  <div
+                    v-for="(h, i) in pdctlPdHistory"
+                    :key="i"
+                    class="pd-history-item"
+                    @mousedown.prevent="selectPdctlPDHistory(h)"
+                  >
+                    <span class="pd-history-text">{{ h }}</span>
+                    <button class="pd-history-del" @mousedown.prevent.stop="removePdctlPDHistory(i)" title="删除">×</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- TiUP Version -->
+            <div class="form-group">
+              <label>TiUP 版本</label>
+              <input v-model="pdctl.tiupVersion" class="form-input" placeholder="v8.1.0" />
+            </div>
+
+            <!-- Command row: command select + sub-command input -->
+            <div class="form-row">
+              <div class="form-group flex-1">
+                <label>命令 <span class="cmd-desc-inline" v-if="pdctlCommandDesc">— {{ pdctlCommandDesc }}</span></label>
+                <select v-model="pdctl.command" class="form-select">
+                  <option
+                    v-for="c in pdctlCommands"
+                    :key="c.name"
+                    :value="c.name"
+                    :title="c.desc"
+                  >{{ c.name }}</option>
+                </select>
+              </div>
+              <div class="form-group flex-1">
+                <label>子命令/参数</label>
+                <input
+                  v-model="pdctl.subCommand"
+                  class="form-input"
+                  placeholder="show / topread 5 / ..."
+                  @keyup.enter="runPdctl(false)"
+                />
+              </div>
+            </div>
+
+            <!-- Command preview -->
+            <div class="form-group">
+              <label>预览</label>
+              <pre class="cmd-preview">{{ pdctlPreview }}</pre>
+            </div>
+
+            <!-- Actions -->
+            <div class="form-actions">
+              <button class="run-btn" @click="runPdctl(false)" :disabled="pdctl.loading || !pdctlReady">
+                <svg v-if="pdctl.loading" class="spin-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                  <path d="M21 12a9 9 0 11-6.219-8.56" />
+                </svg>
+                <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
+                  <polygon points="5 3 19 12 5 21 5 3" />
+                </svg>
+                {{ pdctl.loading ? '执行中...' : '运行' }}
+              </button>
+              <button class="help-btn" @click="runPdctlHelp()" :disabled="pdctl.loading || !pdctlReady" title="在当前命令后追加 --help 并执行">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
+                  <circle cx="12" cy="12" r="10" /><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3" /><line x1="12" y1="17" x2="12.01" y2="17" />
+                </svg>
+                Help
+              </button>
+              <button class="clear-btn" v-if="pdctl.result || pdctl.error" @click="clearPdctlResult">清除结果</button>
+            </div>
+
+            <!-- Error -->
+            <div v-if="pdctl.error" class="result-error">{{ pdctl.error }}</div>
+
+            <!-- Result -->
+            <div v-if="pdctl.result" class="result-box">
+              <div class="result-header">
+                <span class="result-count">
+                  exit={{ pdctl.result.exit_code }} · {{ pdctl.result.duration_ms }} ms
+                  <span v-if="pdctlIsJSON" class="result-badge json-badge">JSON</span>
+                  <span v-else class="result-badge text-badge">TEXT</span>
+                </span>
+                <div class="result-actions">
+                  <div v-if="pdctlIsJSON" class="view-switch">
+                    <button
+                      class="view-switch-btn"
+                      :class="{ active: pdctl.viewMode === 'pretty' }"
+                      @click="pdctl.viewMode = 'pretty'"
+                    >Pretty</button>
+                    <button
+                      class="view-switch-btn"
+                      :class="{ active: pdctl.viewMode === 'raw' }"
+                      @click="pdctl.viewMode = 'raw'"
+                    >Raw</button>
+                  </div>
+                  <button class="copy-btn" @click="copyPdctlOutput" title="复制输出">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13">
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                    </svg>
+                    {{ copied ? '已复制' : '复制' }}
+                  </button>
+                </div>
+              </div>
+              <pre class="cmd-executed">$ {{ pdctl.result.command }}</pre>
+              <pre v-if="pdctl.result.preamble" class="cmd-preamble">{{ pdctl.result.preamble }}</pre>
+
+              <!-- Pretty JSON view -->
+              <pre
+                v-if="pdctlIsJSON && pdctl.viewMode === 'pretty'"
+                class="result-output json-output"
+                v-html="pdctlJsonHTML"
+              ></pre>
+              <!-- Raw / text view -->
+              <pre v-else class="result-output">{{ pdctl.result.output || '(no output)' }}</pre>
+
+              <div v-if="pdctl.result.error" class="result-error" style="margin-top: 8px">{{ pdctl.result.error }}</div>
+            </div>
+          </div>
+
         </div>
       </div>
     </transition>
@@ -481,12 +676,81 @@
 <script>
 import { mapState } from 'pinia'
 import { useClusterStore } from '../stores/cluster'
-import { tikvAPI, balancerAPI } from '../services/api'
+import { tikvAPI, balancerAPI, pdctlAPI } from '../services/api'
 
 const PD_HISTORY_KEY = 'kv2graph_pd_history'
 const BAL_PD_HISTORY_KEY = 'balancer_pd_history'
+const PDCTL_PD_HISTORY_KEY = 'pdctl_pd_history'
 const PD_HISTORY_MAX = 10
 const QUERY_TIMEOUT = 60000 // 60s
+
+// Top-level pd-ctl commands with descriptions (from `pd-ctl --help`)
+const PDCTL_COMMANDS = [
+  { name: 'cluster',              desc: 'show the cluster information' },
+  { name: 'config',               desc: 'tune pd configs' },
+  { name: 'health',               desc: "show all node's health information of the pd cluster" },
+  { name: 'hot',                  desc: 'show the hotspot status of the cluster' },
+  { name: 'keyspace',             desc: 'keyspace commands' },
+  { name: 'keyspace-group',       desc: 'show keyspace group information' },
+  { name: 'label',                desc: 'show the labels' },
+  { name: 'log',                  desc: 'set log level' },
+  { name: 'member',               desc: 'show the pd member status' },
+  { name: 'min-resolved-ts',      desc: 'show min resolved ts' },
+  { name: 'operator',             desc: 'operator commands' },
+  { name: 'ping',                 desc: 'show the total time spend ping the pd' },
+  { name: 'plugin',               desc: 'plugin commands' },
+  { name: 'region',               desc: 'show the region status' },
+  { name: 'resource-manager',     desc: 'resource-manager commands' },
+  { name: 'scheduler',            desc: 'scheduler commands' },
+  { name: 'service-gc-safepoint', desc: 'show all service gc safepoint' },
+  { name: 'store',                desc: 'manipulate or query stores' },
+  { name: 'tso',                  desc: 'parse TSO to the system and logic time' },
+  { name: 'unsafe',               desc: 'Unsafe operations' },
+  { name: 'completion',           desc: 'Output shell completion code for the specified shell (bash)' },
+  { name: 'help',                 desc: 'Help about any command' },
+]
+
+// HTML escape (safe for insertion via v-html).
+function escapeHTML(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+// prettyPrintJSON returns an HTML string with syntax-highlighting classes
+// applied to the pretty-printed JSON (2-space indent). Tokens:
+//   .j-key   — object keys
+//   .j-str   — string values
+//   .j-num   — numbers
+//   .j-bool  — true/false
+//   .j-null  — null
+//   .j-punct — braces, brackets, commas, colons
+function prettyPrintJSON(value) {
+  const json = JSON.stringify(value, null, 2)
+  if (json == null) return ''
+  // Regex matches JSON token types: strings (with optional trailing colon for keys),
+  // booleans, nulls, numbers. Punctuation is handled separately below.
+  const tokenRE = /"(?:[^"\\]|\\.)*"(\s*:)?|\b(?:true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g
+  // First escape everything, then replace token matches in the ESCAPED string using the
+  // same regex (JSON strings won't contain unescaped < > & so this is safe).
+  const escaped = escapeHTML(json)
+  return escaped.replace(tokenRE, (match, keyColon) => {
+    if (match.startsWith('&quot;')) {
+      // Was a string literal originally (escapeHTML turned " into &quot;).
+      if (keyColon) {
+        // Key — strip the colon from the match and re-emit with punctuation span.
+        const keyPart = match.slice(0, match.length - keyColon.length)
+        return `<span class="j-key">${keyPart}</span><span class="j-punct">${keyColon}</span>`
+      }
+      return `<span class="j-str">${match}</span>`
+    }
+    if (match === 'true' || match === 'false') return `<span class="j-bool">${match}</span>`
+    if (match === 'null') return `<span class="j-null">${match}</span>`
+    return `<span class="j-num">${match}</span>`
+  })
+}
 
 export default {
   name: 'GraphToolsPanel',
@@ -503,6 +767,7 @@ export default {
       tabs: [
         { id: 'kv2graph', label: 'KV2Graph' },
         { id: 'balancer', label: 'Region Balancer' },
+        { id: 'pdctl', label: 'PD Ctl' },
       ],
       kv: {
         pdSource: 'cluster',
@@ -519,6 +784,10 @@ export default {
         resultCount: 0,
         resultJson: '',
         error: '',
+        hexInput: '',
+        hexGraphId: '',
+        hexGraphIdHex: '',
+        hexError: '',
       },
       bal: {
         pdSource: 'cluster',
@@ -538,10 +807,26 @@ export default {
         expandedTask: null,
         eventSource: null,
       },
+      pdctl: {
+        pdSource: 'cluster',
+        clusterName: '',
+        customPD: '',
+        tiupVersion: 'v8.1.0',
+        command: 'scheduler',
+        subCommand: 'show',
+        loading: false,
+        result: null, // { command, preamble, output, raw, exit_code, duration_ms, error? }
+        error: '',
+        viewMode: 'pretty', // 'pretty' | 'raw' (only used when output is JSON)
+      },
+      pdctlCommands: PDCTL_COMMANDS,
+      showPdctlPDHistory: false,
+      pdctlPdHistory: [],
       _balRefreshTimer: null,
       _elapsedTimer: null,
       elapsedTick: 0,
       copied: false,
+      hexCopied: false,
       showPDHistory: false,
       pdHistory: [],
       showBalPDHistory: false,
@@ -571,6 +856,48 @@ export default {
       if (this.bal.pdSource === 'cluster') return !!this.bal.clusterName
       return !!this.bal.customPD.trim()
     },
+    pdctlReady() {
+      if (this.pdctl.pdSource === 'cluster') return !!this.pdctl.clusterName
+      return !!this.pdctl.customPD.trim()
+    },
+    pdctlCommandDesc() {
+      const c = this.pdctlCommands.find(x => x.name === this.pdctl.command)
+      return c ? c.desc : ''
+    },
+    pdctlPreview() {
+      const version = (this.pdctl.tiupVersion || 'v8.1.0').trim()
+      let pd = '<PD address>'
+      if (this.pdctl.pdSource === 'custom' && this.pdctl.customPD.trim()) {
+        pd = this.pdctl.customPD.trim()
+      } else if (this.pdctl.pdSource === 'cluster' && this.pdctl.clusterName) {
+        pd = `<${this.pdctl.clusterName} PD>`
+      }
+      const parts = [`tiup ctl:${version} pd --pd ${pd}`]
+      if (this.pdctl.command) parts.push(this.pdctl.command)
+      const sub = (this.pdctl.subCommand || '').trim()
+      if (sub) parts.push(sub)
+      return parts.join(' ')
+    },
+    pdctlParsedJSON() {
+      // Attempts to parse pdctl.result.output as JSON. Returns { ok, value }.
+      if (!this.pdctl.result) return { ok: false, value: null }
+      const text = (this.pdctl.result.output || '').trim()
+      if (!text) return { ok: false, value: null }
+      // Quick heuristic: only attempt to parse if starts with { or [
+      if (text[0] !== '{' && text[0] !== '[') return { ok: false, value: null }
+      try {
+        return { ok: true, value: JSON.parse(text) }
+      } catch {
+        return { ok: false, value: null }
+      }
+    },
+    pdctlIsJSON() {
+      return this.pdctlParsedJSON.ok
+    },
+    pdctlJsonHTML() {
+      if (!this.pdctlParsedJSON.ok) return ''
+      return prettyPrintJSON(this.pdctlParsedJSON.value)
+    },
   },
   watch: {
     activeTab(newVal, oldVal) {
@@ -590,6 +917,7 @@ export default {
   mounted() {
     this.pdHistory = this.loadPDHistory()
     this.balPdHistory = this.loadBalPDHistory()
+    this.pdctlPdHistory = this.loadPdctlPDHistory()
   },
   beforeUnmount() {
     this.disconnectSSE()
@@ -647,6 +975,125 @@ export default {
     },
     hideBalPDHistoryDelayed() {
       setTimeout(() => { this.showBalPDHistory = false }, 150)
+    },
+    // --- PDCtl PD History ---
+    loadPdctlPDHistory() {
+      try {
+        return JSON.parse(localStorage.getItem(PDCTL_PD_HISTORY_KEY) || '[]')
+      } catch { return [] }
+    },
+    savePdctlPDHistory() {
+      localStorage.setItem(PDCTL_PD_HISTORY_KEY, JSON.stringify(this.pdctlPdHistory))
+    },
+    addPdctlPDHistory(pd) {
+      const trimmed = pd.trim()
+      if (!trimmed) return
+      this.pdctlPdHistory = [trimmed, ...this.pdctlPdHistory.filter(h => h !== trimmed)].slice(0, PD_HISTORY_MAX)
+      this.savePdctlPDHistory()
+    },
+    removePdctlPDHistory(i) {
+      this.pdctlPdHistory.splice(i, 1)
+      this.savePdctlPDHistory()
+    },
+    selectPdctlPDHistory(h) {
+      this.pdctl.customPD = h
+      this.showPdctlPDHistory = false
+    },
+    hidePdctlPDHistoryDelayed() {
+      setTimeout(() => { this.showPdctlPDHistory = false }, 150)
+    },
+    // --- PDCtl Execution ---
+    async runPdctl(withHelp = false) {
+      if (!this.pdctlReady) return
+      this.pdctl.loading = true
+      this.pdctl.error = ''
+      this.pdctl.result = null
+      if (this.pdctl.pdSource === 'custom') {
+        this.addPdctlPDHistory(this.pdctl.customPD)
+      }
+      try {
+        const params = {
+          tiup_version: (this.pdctl.tiupVersion || 'v8.1.0').trim(),
+          command: this.pdctl.command || '',
+          sub_command: (this.pdctl.subCommand || '').trim(),
+          help: !!withHelp,
+        }
+        if (this.pdctl.pdSource === 'cluster') {
+          params.cluster_name = this.pdctl.clusterName
+        } else {
+          params.pd_addr = this.pdctl.customPD.trim()
+        }
+        const res = await pdctlAPI.exec(params)
+        this.pdctl.result = res.data
+      } catch (e) {
+        this.pdctl.error = e.response?.data?.detail || e.message || '执行失败'
+      } finally {
+        this.pdctl.loading = false
+      }
+    },
+    runPdctlHelp() {
+      return this.runPdctl(true)
+    },
+    clearPdctlResult() {
+      this.pdctl.result = null
+      this.pdctl.error = ''
+    },
+    // Generic clipboard copy with fallback for non-HTTPS / older browsers.
+    // Returns true on success, false on failure (so callers can surface errors).
+    async _copyText(text) {
+      const s = text == null ? '' : String(text)
+      // Prefer the modern async API when available and in a secure context.
+      if (navigator.clipboard && window.isSecureContext) {
+        try {
+          await navigator.clipboard.writeText(s)
+          return true
+        } catch (e) {
+          // fall through to legacy fallback
+        }
+      }
+      // Legacy fallback: offscreen textarea + execCommand('copy').
+      try {
+        const ta = document.createElement('textarea')
+        ta.value = s
+        ta.setAttribute('readonly', '')
+        ta.style.position = 'fixed'
+        ta.style.top = '0'
+        ta.style.left = '0'
+        ta.style.width = '1px'
+        ta.style.height = '1px'
+        ta.style.padding = '0'
+        ta.style.border = 'none'
+        ta.style.outline = 'none'
+        ta.style.boxShadow = 'none'
+        ta.style.background = 'transparent'
+        ta.style.opacity = '0'
+        document.body.appendChild(ta)
+        ta.focus()
+        ta.select()
+        ta.setSelectionRange(0, s.length)
+        const ok = document.execCommand('copy')
+        document.body.removeChild(ta)
+        return ok
+      } catch (e) {
+        return false
+      }
+    },
+    async copyPdctlOutput() {
+      if (!this.pdctl.result) return
+      let text = this.pdctl.result.output || ''
+      // Copy the pretty-printed JSON when we have one and the user is viewing it.
+      if (this.pdctlIsJSON && this.pdctl.viewMode === 'pretty') {
+        try {
+          text = JSON.stringify(this.pdctlParsedJSON.value, null, 2)
+        } catch {}
+      }
+      const ok = await this._copyText(text)
+      if (ok) {
+        this.copied = true
+        setTimeout(() => { this.copied = false }, 2000)
+      } else {
+        this.pdctl.error = '复制失败：浏览器拒绝了剪切板访问（请检查是否为 HTTPS / 手动复制）'
+      }
     },
     async runKV2Graph() {
       if (!this.kvReady) return
@@ -728,11 +1175,51 @@ export default {
       this.kv.resultJson = ''
     },
     async copyResult() {
-      try {
-        await navigator.clipboard.writeText(this.kv.resultJson)
+      const ok = await this._copyText(this.kv.resultJson)
+      if (ok) {
         this.copied = true
         setTimeout(() => { this.copied = false }, 2000)
-      } catch {}
+      }
+    },
+    convertHexToGraphId() {
+      this.kv.hexError = ''
+      this.kv.hexGraphId = ''
+      this.kv.hexGraphIdHex = ''
+      // Normalize: strip whitespace, 0x prefix, commas, dashes
+      let raw = (this.kv.hexInput || '').trim()
+      if (!raw) {
+        this.kv.hexError = '请输入 hex 内容'
+        return
+      }
+      let cleaned = raw.replace(/\s+/g, '').replace(/,/g, '').replace(/-/g, '')
+      if (cleaned.toLowerCase().startsWith('0x')) cleaned = cleaned.slice(2)
+      if (!/^[0-9a-fA-F]+$/.test(cleaned)) {
+        this.kv.hexError = '输入包含非 hex 字符'
+        return
+      }
+      // Need first byte (2 chars) + 4 bytes (8 chars) = 10 hex chars
+      if (cleaned.length < 10) {
+        this.kv.hexError = `hex 长度至少需要 5 字节 (10 hex chars)，当前 ${cleaned.length} chars`
+        return
+      }
+      // Skip the leading byte (2 hex chars), take the next 4 bytes (8 hex chars)
+      const idHex = cleaned.substring(2, 10).toUpperCase()
+      // Parse as big-endian 32-bit unsigned integer
+      const idDec = parseInt(idHex, 16)
+      if (Number.isNaN(idDec)) {
+        this.kv.hexError = '解析失败'
+        return
+      }
+      this.kv.hexGraphId = String(idDec)
+      this.kv.hexGraphIdHex = idHex
+    },
+    async copyGraphId() {
+      if (this.kv.hexGraphId === '') return
+      const ok = await this._copyText(this.kv.hexGraphId)
+      if (ok) {
+        this.hexCopied = true
+        setTimeout(() => { this.hexCopied = false }, 2000)
+      }
     },
     // --- Region Balancer methods ---
     async analyzeCluster() {
@@ -1098,6 +1585,96 @@ export default {
   font-size: 12px;
   color: #6c7086;
   line-height: 1.5;
+}
+
+/* Hex Key Range → Graph ID converter */
+.hex-converter {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: rgba(137, 180, 250, 0.05);
+  border: 1px solid rgba(137, 180, 250, 0.2);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+.hex-converter > label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #89b4fa;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.hex-converter-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.hex-input {
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 12px;
+  letter-spacing: 0.3px;
+}
+.convert-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #89b4fa;
+  color: #1e1e2e;
+  border: none;
+  border-radius: 6px;
+  padding: 0 14px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+.convert-btn:hover {
+  background: #b4d0ff;
+}
+.hex-converter-hint {
+  font-size: 11px;
+  color: #6c7086;
+  line-height: 1.4;
+}
+.hex-converter-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  background: #181825;
+  border: 1px solid #313244;
+  border-radius: 6px;
+  padding: 8px 12px;
+}
+.hex-result-label {
+  font-size: 11px;
+  color: #a6adc8;
+  font-weight: 600;
+}
+.hex-result-id {
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 14px;
+  font-weight: 700;
+  color: #a6e3a1;
+  background: none;
+  padding: 0;
+}
+.hex-result-meta {
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 11px;
+  color: #6c7086;
+}
+.hex-copy-btn {
+  margin-left: auto;
+}
+.hex-converter-error {
+  background: rgba(243, 139, 168, 0.1);
+  border: 1px solid rgba(243, 139, 168, 0.3);
+  border-radius: 6px;
+  color: #f38ba8;
+  padding: 6px 10px;
+  font-size: 12px;
 }
 
 /* Form */
@@ -1780,4 +2357,154 @@ label {
   margin: 0;
   font-family: 'JetBrains Mono', 'Consolas', monospace;
 }
+
+/* --- PD Ctl styles --- */
+.cmd-desc-inline {
+  font-weight: 400;
+  color: #6c7086;
+  margin-left: 4px;
+  font-size: 11px;
+}
+
+.cmd-preview {
+  background: #181825;
+  border: 1px solid #313244;
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: #89b4fa;
+  margin: 0;
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.cmd-executed {
+  background: #181825;
+  border: 1px solid #313244;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: #fab387;
+  margin: 0;
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.result-output {
+  background: #11111b;
+  border: 1px solid #313244;
+  border-radius: 6px;
+  padding: 12px;
+  font-size: 12px;
+  color: #cdd6f4;
+  overflow: auto;
+  max-height: 500px;
+  white-space: pre;
+  margin: 0;
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+}
+
+.help-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #313244;
+  color: #89b4fa;
+  border: 1px solid #45475a;
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+.help-btn:hover:not(:disabled) {
+  background: #45475a;
+}
+.help-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* --- PD Ctl result area: preamble + pretty JSON --- */
+.cmd-preamble {
+  background: #1a1a2a;
+  border: 1px dashed #313244;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: #6c7086;
+  margin: 0;
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.result-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-left: 6px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+.json-badge {
+  background: rgba(166, 227, 161, 0.15);
+  color: #a6e3a1;
+}
+.text-badge {
+  background: rgba(137, 180, 250, 0.12);
+  color: #89b4fa;
+}
+
+.result-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.view-switch {
+  display: inline-flex;
+  background: #313244;
+  border: 1px solid #45475a;
+  border-radius: 5px;
+  overflow: hidden;
+}
+.view-switch-btn {
+  background: none;
+  border: none;
+  color: #a6adc8;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.view-switch-btn + .view-switch-btn {
+  border-left: 1px solid #45475a;
+}
+.view-switch-btn:hover:not(.active) {
+  color: #cdd6f4;
+  background: #3b3d52;
+}
+.view-switch-btn.active {
+  background: #89b4fa;
+  color: #1e1e2e;
+}
+
+/* Pretty JSON colouring */
+.json-output {
+  color: #cdd6f4;
+}
+.json-output .j-key { color: #89b4fa; }
+.json-output .j-str { color: #a6e3a1; }
+.json-output .j-num { color: #fab387; }
+.json-output .j-bool { color: #f5c2e7; }
+.json-output .j-null { color: #6c7086; font-style: italic; }
+.json-output .j-punct { color: #6c7086; }
 </style>
