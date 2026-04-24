@@ -1,7 +1,10 @@
 <template>
   <div class="home-view" :class="terminalLayoutClass">
     <header class="app-header">
-      <h1>TiUP Cluster Visualizer</h1>
+      <h1>
+        <img src="/tivz-icon.svg" class="app-logo" alt="TiUP Cluster Visualizer" />
+        TiUP Cluster Visualizer
+      </h1>
       <div class="header-actions">
         <!-- Check Update button -->
         <button class="header-btn header-btn-update" @click="checkUpdate" :disabled="updateChecking" :title="updateBtnTitle">
@@ -542,6 +545,20 @@ export default {
   margin: 0;
   font-size: 28px;
   font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.app-header .app-logo {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.15);
+  padding: 4px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  flex-shrink: 0;
 }
 
 .header-actions {
