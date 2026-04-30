@@ -125,4 +125,19 @@ export const updateAPI = {
   apply: () => api.post('/update/apply'),
 }
 
+export const clusterCreateAPI = {
+  deploy: (params) => api.post('/cluster-create/deploy', params, { timeout: 30 * 60 * 1000 }),
+  deployUpload: (formData) => api.post('/cluster-create/deploy', formData, {
+    timeout: 30 * 60 * 1000,
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }),
+  listHistory: () => api.get('/cluster-create/history'),
+  getConfig: (name) => api.get(`/cluster-create/config/${encodeURIComponent(name)}`),
+  getConfigUrl: (name, action = 'view') => {
+    const token = localStorage.getItem('auth_token')
+    return `${base}/api/v1/cluster-create/config/${encodeURIComponent(name)}?action=${action}&token=${encodeURIComponent(token || '')}`
+  },
+  deleteConfig: (name) => api.delete(`/cluster-create/config/${encodeURIComponent(name)}`),
+}
+
 export default api

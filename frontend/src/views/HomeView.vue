@@ -109,6 +109,9 @@
     <!-- Graph Tools Panel -->
     <GraphToolsPanel :visible="showGraphTools" @close="showGraphTools = false" />
 
+    <!-- Create Cluster Modal -->
+    <CreateClusterModal :visible="showCreateCluster" @close="showCreateCluster = false" @deployed="onClusterDeployed" />
+
     <!-- Update Modal -->
     <teleport to="body">
       <transition name="fade">
@@ -195,6 +198,15 @@
       <section class="clusters-section">
         <h2 class="section-title">TiKV Clusters</h2>
         <div class="clusters-grid" ref="clustersGrid">
+          <!-- Create Cluster Card (same style as ClusterCard) -->
+          <div class="create-cluster-card" @click="showCreateCluster = true" title="创建新集群">
+            <svg width="48" height="48" viewBox="0 0 48 48" fill="none" class="create-plus-icon">
+              <circle cx="24" cy="24" r="22" stroke="currentColor" stroke-width="2" stroke-dasharray="6 4" opacity="0.35"/>
+              <line x1="24" y1="12" x2="24" y2="36" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+              <line x1="12" y1="24" x2="36" y2="24" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+            </svg>
+            <span class="create-label">创建集群</span>
+          </div>
           <ClusterCard 
             v-for="cluster in clusters" 
             :key="cluster.name"
@@ -236,6 +248,7 @@ import WebTerminal from '../components/WebTerminal.vue'
 import ServerLogModal from '../components/ServerLogModal.vue'
 import GraphToolsPanel from '../components/GraphToolsPanel.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
+import CreateClusterModal from '../components/CreateClusterModal.vue'
 import { updateAPI } from '../services/api'
 
 export default {
@@ -248,7 +261,8 @@ export default {
     WebTerminal,
     ServerLogModal,
     GraphToolsPanel,
-    ConfirmDialog
+    ConfirmDialog,
+    CreateClusterModal
   },
   props: {
     username: {
@@ -274,6 +288,7 @@ export default {
       ],
       showServerLogs: false,
       showGraphTools: false,
+      showCreateCluster: false,
       // update
       updateChecking: false,
       updateAvailable: false,
@@ -403,6 +418,12 @@ export default {
     },
     openGraphTools() {
       this.showGraphTools = true
+    },
+    onClusterDeployed(result) {
+      // Auto-refresh cluster list after successful deployment
+      this.refresh()
+      // Keep the modal open so user can see the result
+      // Optionally close after a delay
     },
     async checkUpdateSilent() {
       try {
@@ -837,6 +858,54 @@ export default {
 
 .clusters-section {
   margin-bottom: 24px;
+}
+
+/* Create Cluster Card - same size/shape as ClusterCard */
+.create-cluster-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: white;
+  border: 2px dashed #d1d5db;
+  border-radius: 8px;
+  min-width: 160px;
+  min-height: 220px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  gap: 12px;
+  padding: 20px;
+  user-select: none;
+}
+
+.create-cluster-card:hover {
+  border-color: #3b82f6;
+  border-style: solid;
+  background: #eff6ff;
+  box-shadow: 0 4px 12px rgba(59,130,246,0.2);
+  transform: translateY(-2px);
+}
+
+.create-plus-icon {
+  color: #9ca3af;
+  transition: color 0.2s, transform 0.2s;
+}
+
+.create-cluster-card:hover .create-plus-icon {
+  color: #3b82f6;
+  transform: scale(1.08);
+}
+
+.create-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #9ca3af;
+  letter-spacing: 0.3px;
+  transition: color 0.2s;
+}
+
+.create-cluster-card:hover .create-label {
+  color: #3b82f6;
 }
 
 .clusters-grid {

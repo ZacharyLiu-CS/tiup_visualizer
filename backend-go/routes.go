@@ -16,30 +16,32 @@ import (
 
 // Server holds all dependencies for HTTP handlers.
 type Server struct {
-	cfg      *AppConfig
-	auth     *AuthService
-	tiup     *TiUPService
-	tikv     *TiKVService
-	update   *UpdateService
-	balancer *BalancerService
-	pdctl    *PDCtlService
-	execDir  string
-	version  string
-	mux      *http.ServeMux
+	cfg           *AppConfig
+	auth          *AuthService
+	tiup          *TiUPService
+	tikv          *TiKVService
+	update        *UpdateService
+	balancer      *BalancerService
+	pdctl         *PDCtlService
+	clusterCreate *ClusterCreateService
+	execDir       string
+	version       string
+	mux           *http.ServeMux
 }
 
 func NewServer(cfg *AppConfig, execDir string) *Server {
 	s := &Server{
-		cfg:      cfg,
-		auth:     NewAuthService(cfg),
-		tiup:     NewTiUPService(),
-		tikv:     NewTiKVService(),
-		update:   NewUpdateService(execDir),
-		balancer: NewBalancerService(),
-		pdctl:    NewPDCtlService(),
-		execDir:  execDir,
-		version:  loadVersion(execDir),
-		mux:      http.NewServeMux(),
+		cfg:           cfg,
+		auth:          NewAuthService(cfg),
+		tiup:          NewTiUPService(),
+		tikv:          NewTiKVService(),
+		update:        NewUpdateService(execDir),
+		balancer:      NewBalancerService(),
+		pdctl:         NewPDCtlService(),
+		clusterCreate: NewClusterCreateService(execDir),
+		execDir:       execDir,
+		version:       loadVersion(execDir),
+		mux:           http.NewServeMux(),
 	}
 	slog.Info("Build version", "version", s.version)
 	s.registerRoutes()
@@ -103,6 +105,12 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST "+prefix+"/clusters/{clusterName}/stop", s.requireAuth(s.handleClusterStop))
 	s.mux.HandleFunc("POST "+prefix+"/clusters/{clusterName}/clean", s.requireAuth(s.handleClusterClean))
 	s.mux.HandleFunc("POST "+prefix+"/clusters/{clusterName}/destroy", s.requireAuth(s.handleClusterDestroy))
+
+	// Cluster Create routes (auth required)
+	s.mux.HandleFunc("POST "+prefix+"/cluster-create/deploy", s.requireAuth(s.handleClusterCreateDeploy))
+	s.mux.HandleFunc("GET "+prefix+"/cluster-create/history", s.requireAuth(s.handleClusterCreateHistory))
+	s.mux.HandleFunc("GET "+prefix+"/cluster-create/config/{name}", s.requireAuth(s.handleClusterGetConfig))
+	s.mux.HandleFunc("DELETE "+prefix+"/cluster-create/config/{name}", s.requireAuth(s.handleClusterDeleteConfig))
 
 	// WebSocket terminal (GET only, must be before catch-all)
 	s.mux.HandleFunc("GET /ws/terminal", s.handleTerminal)
