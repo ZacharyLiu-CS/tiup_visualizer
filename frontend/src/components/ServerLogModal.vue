@@ -44,13 +44,41 @@
       </div>
     </div>
   </div>
+
+  <!-- Custom Confirm Dialog for cleanLog -->
+  <ConfirmDialog
+    :visible="confirmDialog.visible"
+    :title="confirmDialog.title"
+    :message="confirmDialog.message"
+    :type="confirmDialog.type"
+    :confirmText="confirmDialog.confirmText"
+    :cancelText="confirmDialog.cancelText"
+    @confirm="onConfirmDialog"
+    @cancel="onCancelDialog"
+    @update:visible="confirmDialog.visible = $event"
+  />
+  <!-- Custom Alert Dialog -->
+  <ConfirmDialog
+    :visible="alertDialog.visible"
+    :title="alertDialog.title"
+    :message="alertDialog.message"
+    :type="alertDialog.type"
+    :singleButton="true"
+    :cancelText="'OK'"
+    @confirm="alertDialog.visible = false"
+    @update:visible="alertDialog.visible = $event"
+  />
 </template>
 
 <script>
 import { serverLogAPI } from '../services/api'
+import ConfirmDialog from './ConfirmDialog.vue'
 
 export default {
   name: 'ServerLogModal',
+  components: {
+    ConfirmDialog
+  },
   props: {
     visible: {
       type: Boolean,
@@ -62,7 +90,22 @@ export default {
     return {
       logFiles: [],
       loading: false,
-      error: null
+      error: null,
+      confirmDialog: {
+        visible: false,
+        title: '',
+        message: '',
+        type: 'warning',
+        confirmText: 'Confirm',
+        cancelText: 'Cancel',
+        payload: null, // 存储待操作的文件名
+      },
+      alertDialog: {
+        visible: false,
+        title: '',
+        message: '',
+        type: 'default',
+      }
     }
   },
   watch: {
@@ -101,13 +144,37 @@ export default {
       link.click()
       document.body.removeChild(link)
     },
-    async cleanLog(filename) {
-      if (!confirm(`确认清空日志 ${filename}？此操作不可恢复。`)) return
+    cleanLog(filename) {
+      this.confirmDialog = {
+        visible: true,
+        title: '清空日志',
+        message: `确认清空日志 ${filename}？此操作不可恢复。`,
+        type: 'warning',
+        confirmText: '清空',
+        cancelText: '取消',
+        payload: filename,
+      }
+    },
+    async onConfirmDialog() {
+      const filename = this.confirmDialog.payload
+      this.confirmDialog.visible = false
       try {
         await serverLogAPI.cleanLog(filename)
         this.fetchLogs()
+        this.showAlert('Success', `日志 ${filename} 已清空`, 'default')
       } catch (e) {
-        alert('清空失败：' + (e.response?.data?.detail || e.message))
+        this.showAlert('Error', '清空失败：' + (e.response?.data?.detail || e.message), 'danger')
+      }
+    },
+    onCancelDialog() {
+      this.confirmDialog.visible = false
+    },
+    showAlert(title, message, type = 'default') {
+      this.alertDialog = {
+        visible: true,
+        title,
+        message,
+        type,
       }
     },
     formatSize(bytes) {

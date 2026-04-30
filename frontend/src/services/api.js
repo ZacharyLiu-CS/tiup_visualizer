@@ -55,6 +55,11 @@ export const clusterAPI = {
     }
     return url
   },
+  // Cluster operations (destroy needs longer timeout)
+  startCluster: (clusterName) => api.post(`/clusters/${encodeURIComponent(clusterName)}/start`, {}, { timeout: 5 * 60 * 1000 }),
+  stopCluster: (clusterName) => api.post(`/clusters/${encodeURIComponent(clusterName)}/stop`, {}, { timeout: 5 * 60 * 1000 }),
+  cleanCluster: (clusterName) => api.post(`/clusters/${encodeURIComponent(clusterName)}/clean`, {}, { timeout: 5 * 60 * 1000 }),
+  destroyCluster: (clusterName) => api.post(`/clusters/${encodeURIComponent(clusterName)}/destroy`, {}, { timeout: 10 * 60 * 1000 }),
 }
 
 export const serverLogAPI = {

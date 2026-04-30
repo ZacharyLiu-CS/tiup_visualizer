@@ -345,3 +345,64 @@ func (s *TiUPService) GetLogFilePath(clusterName, componentID, filename string) 
 	logPath := filepath.Join(component.DeployDir, "log", filename)
 	return logPath, component, nil
 }
+
+// StartCluster starts a TiUP cluster.
+func (s *TiUPService) StartCluster(clusterName string) (string, error) {
+	cmd := fmt.Sprintf("tiup cluster start %s", clusterName)
+	slog.Info("TiUP: starting cluster", "cluster", clusterName, "command", cmd)
+	output, err := ExecuteCommand(cmd, 5*time.Minute)
+	if err != nil {
+		slog.Error("TiUP: start cluster failed", "cluster", clusterName, "error", err)
+		return output, err
+	}
+	slog.Info("TiUP: start cluster success", "cluster", clusterName)
+	// Invalidate cache after operation
+	s.cache = newTTLCache(cacheTTL)
+	return output, nil
+}
+
+// StopCluster stops a TiUP cluster.
+func (s *TiUPService) StopCluster(clusterName string) (string, error) {
+	cmd := fmt.Sprintf("tiup cluster stop %s -y", clusterName)
+	slog.Info("TiUP: stopping cluster", "cluster", clusterName, "command", cmd)
+	output, err := ExecuteCommand(cmd, 5*time.Minute)
+	if err != nil {
+		slog.Error("TiUP: stop cluster failed", "cluster", clusterName, "error", err)
+		return output, err
+	}
+	slog.Info("TiUP: stop cluster success", "cluster", clusterName)
+	// Invalidate cache after operation
+	s.cache = newTTLCache(cacheTTL)
+	return output, nil
+}
+
+// CleanCluster cleans all data of a TiUP cluster.
+func (s *TiUPService) CleanCluster(clusterName string) (string, error) {
+	cmd := fmt.Sprintf("tiup cluster clean %s --all -y", clusterName)
+	slog.Info("TiUP: cleaning cluster", "cluster", clusterName, "command", cmd)
+	output, err := ExecuteCommand(cmd, 5*time.Minute)
+	if err != nil {
+		slog.Error("TiUP: clean cluster failed", "cluster", clusterName, "error", err)
+		return output, err
+	}
+	slog.Info("TiUP: clean cluster success", "cluster", clusterName)
+	// Invalidate cache after operation
+	s.cache = newTTLCache(cacheTTL)
+	return output, nil
+}
+
+// DestroyCluster destroys a TiUP cluster (requires confirmation pipe).
+func (s *TiUPService) DestroyCluster(clusterName string) (string, error) {
+	// Use -y flag to skip interactive confirmation
+	cmd := fmt.Sprintf("echo \"Yes, I know my cluster and data will be deleted.\" |tiup cluster destroy %s", clusterName)
+	slog.Warn("TiUP: destroying cluster", "cluster", clusterName, "command", cmd)
+	output, err := ExecuteCommand(cmd, 10*time.Minute)
+	if err != nil {
+		slog.Error("TiUP: destroy cluster failed", "cluster", clusterName, "error", err, "output", truncate(output, 500))
+		return output, err
+	}
+	slog.Warn("TiUP: destroy cluster success", "cluster", clusterName, "output", truncate(output, 200))
+	// Invalidate cache after operation
+	s.cache = newTTLCache(cacheTTL)
+	return output, nil
+}

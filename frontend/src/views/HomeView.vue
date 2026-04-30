@@ -149,6 +149,18 @@
       </transition>
     </teleport>
 
+    <!-- Alert Dialog -->
+    <ConfirmDialog
+      :visible="alertDialog.visible"
+      :title="alertDialog.title"
+      :message="alertDialog.message"
+      :type="alertDialog.type"
+      :singleButton="true"
+      :cancelText="'OK'"
+      @confirm="alertDialog.visible = false"
+      @update:visible="alertDialog.visible = $event"
+    />
+
     <div class="loading-overlay" v-if="loading">
       <div class="spinner"></div>
       <p>Loading clusters...</p>
@@ -192,6 +204,7 @@
             :isHighlighted="highlightedClusters.includes(cluster.name)"
             @connect="handleClusterConnect"
             @detail="handleClusterDetail"
+            @refresh="handleClusterRefresh"
             :ref="el => { if (el) clusterRefs[cluster.name] = el }"
           />
         </div>
@@ -222,6 +235,7 @@ import ConnectionLines from '../components/ConnectionLines.vue'
 import WebTerminal from '../components/WebTerminal.vue'
 import ServerLogModal from '../components/ServerLogModal.vue'
 import GraphToolsPanel from '../components/GraphToolsPanel.vue'
+import ConfirmDialog from '../components/ConfirmDialog.vue'
 import { updateAPI } from '../services/api'
 
 export default {
@@ -233,7 +247,8 @@ export default {
     ConnectionLines,
     WebTerminal,
     ServerLogModal,
-    GraphToolsPanel
+    GraphToolsPanel,
+    ConfirmDialog
   },
   props: {
     username: {
@@ -267,6 +282,12 @@ export default {
       updateApplying: false,
       updateApplyResult: '',
       updateApplyError: false,
+      alertDialog: {
+        visible: false,
+        title: '',
+        message: '',
+        type: 'default',
+      }
     }
   },
   computed: {
@@ -344,6 +365,9 @@ export default {
     async refresh() {
       await this.fetchOverview()
     },
+    async handleClusterRefresh() {
+      await this.refresh()
+    },
     selectTerminalMode(value) {
       this.terminalMode = value
       this.showModeDropdown = false
@@ -403,7 +427,7 @@ export default {
         this.showUpdateModal = true
       } catch (e) {
         this.updateResult = null
-        alert('检查更新失败：' + (e.response?.data?.detail || e.message))
+        this.showAlert('检查更新失败', e.response?.data?.detail || e.message, 'danger')
       } finally {
         this.updateChecking = false
       }
@@ -423,6 +447,14 @@ export default {
     },
     openAIAnalysisPanel() {
       window.open('https://knot.woa.com/chat?web_key=4a8f043b1b9b41239557aa8c6e8dfe84&workspace_id=a5f9086a466f44428c95c443bb576484', '_blank')
+    },
+    showAlert(title, message, type = 'default') {
+      this.alertDialog = {
+        visible: true,
+        title,
+        message,
+        type,
+      }
     },
     updateConnectionLines() {
       this.connectionLines = []

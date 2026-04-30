@@ -98,6 +98,12 @@ func (s *Server) registerRoutes() {
 	// PD Ctl routes (auth required)
 	s.mux.HandleFunc("POST "+prefix+"/pdctl/exec", s.requireAuth(s.handlePDCtlExec))
 
+	// Cluster operation routes (auth required)
+	s.mux.HandleFunc("POST "+prefix+"/clusters/{clusterName}/start", s.requireAuth(s.handleClusterStart))
+	s.mux.HandleFunc("POST "+prefix+"/clusters/{clusterName}/stop", s.requireAuth(s.handleClusterStop))
+	s.mux.HandleFunc("POST "+prefix+"/clusters/{clusterName}/clean", s.requireAuth(s.handleClusterClean))
+	s.mux.HandleFunc("POST "+prefix+"/clusters/{clusterName}/destroy", s.requireAuth(s.handleClusterDestroy))
+
 	// WebSocket terminal (GET only, must be before catch-all)
 	s.mux.HandleFunc("GET /ws/terminal", s.handleTerminal)
 
@@ -1033,5 +1039,79 @@ func (s *Server) handlePDCtlExec(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("PDCtl: exec result", "command", result.Command, "exit_code", result.ExitCode, "duration_ms", result.DurationMs)
 	writeJSON(w, http.StatusOK, result)
+}
+
+// --- Cluster Operations ---
+
+func (s *Server) handleClusterStart(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("clusterName")
+	slog.Info("Cluster operation: start", "cluster", clusterName, "user", r.Header.Get("X-Username"))
+
+	output, err := s.tiup.StartCluster(clusterName)
+	if err != nil {
+		slog.Error("Cluster start failed", "cluster", clusterName, "error", err, "output", truncate(output, 500))
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("start cluster failed: %s\nOutput: %s", err.Error(), output))
+		return
+	}
+	slog.Info("Cluster start success", "cluster", clusterName)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"message": "cluster started successfully",
+		"cluster": clusterName,
+		"output":  output,
+	})
+}
+
+func (s *Server) handleClusterStop(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("clusterName")
+	slog.Info("Cluster operation: stop", "cluster", clusterName, "user", r.Header.Get("X-Username"))
+
+	output, err := s.tiup.StopCluster(clusterName)
+	if err != nil {
+		slog.Error("Cluster stop failed", "cluster", clusterName, "error", err, "output", truncate(output, 500))
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("stop cluster failed: %s\nOutput: %s", err.Error(), output))
+		return
+	}
+	slog.Info("Cluster stop success", "cluster", clusterName)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"message": "cluster stopped successfully",
+		"cluster": clusterName,
+		"output":  output,
+	})
+}
+
+func (s *Server) handleClusterClean(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("clusterName")
+	slog.Warn("Cluster operation: clean", "cluster", clusterName, "user", r.Header.Get("X-Username"))
+
+	output, err := s.tiup.CleanCluster(clusterName)
+	if err != nil {
+		slog.Error("Cluster clean failed", "cluster", clusterName, "error", err, "output", truncate(output, 500))
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("clean cluster failed: %s\nOutput: %s", err.Error(), output))
+		return
+	}
+	slog.Info("Cluster clean success", "cluster", clusterName)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"message": "cluster cleaned successfully",
+		"cluster": clusterName,
+		"output":  output,
+	})
+}
+
+func (s *Server) handleClusterDestroy(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("clusterName")
+	slog.Warn("Cluster operation: destroy", "cluster", clusterName, "user", r.Header.Get("X-Username"))
+
+	output, err := s.tiup.DestroyCluster(clusterName)
+	if err != nil {
+		slog.Error("Cluster destroy failed", "cluster", clusterName, "error", err, "output", truncate(output, 500))
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("destroy cluster failed: %s\nOutput: %s", err.Error(), output))
+		return
+	}
+	slog.Warn("Cluster destroy success", "cluster", clusterName)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"message": "cluster destroyed successfully",
+		"cluster": clusterName,
+		"output":  output,
+	})
 }
 
