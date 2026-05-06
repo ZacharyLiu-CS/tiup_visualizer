@@ -126,11 +126,15 @@ export const updateAPI = {
 }
 
 export const clusterCreateAPI = {
-  deploy: (params) => api.post('/cluster-create/deploy', params, { timeout: 30 * 60 * 1000 }),
+  deploy: (params) => api.post('/cluster-create/deploy', params, { timeout: 60000 }),
   deployUpload: (formData) => api.post('/cluster-create/deploy', formData, {
-    timeout: 30 * 60 * 1000,
+    timeout: 60000,
     headers: { 'Content-Type': 'multipart/form-data' },
   }),
+  deployStreamUrl: (jobId) => {
+    const token = localStorage.getItem('auth_token')
+    return `${base}/api/v1/cluster-create/deploy/stream?job_id=${encodeURIComponent(jobId)}&token=${encodeURIComponent(token || '')}`
+  },
   listHistory: () => api.get('/cluster-create/history'),
   getConfig: (name) => api.get(`/cluster-create/config/${encodeURIComponent(name)}`),
   getConfigUrl: (name, action = 'view') => {

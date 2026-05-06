@@ -108,6 +108,7 @@ func (s *Server) registerRoutes() {
 
 	// Cluster Create routes (auth required)
 	s.mux.HandleFunc("POST "+prefix+"/cluster-create/deploy", s.requireAuth(s.handleClusterCreateDeploy))
+	s.mux.HandleFunc("GET "+prefix+"/cluster-create/deploy/stream", s.requireAuth(s.handleClusterCreateDeployStream))
 	s.mux.HandleFunc("GET "+prefix+"/cluster-create/history", s.requireAuth(s.handleClusterCreateHistory))
 	s.mux.HandleFunc("GET "+prefix+"/cluster-create/config/{name}", s.requireAuth(s.handleClusterGetConfig))
 	s.mux.HandleFunc("DELETE "+prefix+"/cluster-create/config/{name}", s.requireAuth(s.handleClusterDeleteConfig))

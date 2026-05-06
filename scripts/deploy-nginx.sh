@@ -195,8 +195,8 @@ fi
 
 # ---- Deploy files ----
 echo -e "${YELLOW}Deploying files to ${DEPLOY_DIR}...${NC}"
-sudo mkdir -p "$DEPLOY_DIR" "$DEPLOY_DIR/logs"
-sudo chown "$RUN_USER":"$(id -gn "$RUN_USER")" "$DEPLOY_DIR/logs"
+sudo mkdir -p "$DEPLOY_DIR" "$DEPLOY_DIR/logs" "$DEPLOY_DIR/create_cluster_history"
+sudo chown "$RUN_USER":"$(id -gn "$RUN_USER")" "$DEPLOY_DIR/logs" "$DEPLOY_DIR/create_cluster_history"
 
 sudo rm -f "$DEPLOY_DIR/tiup-visualizer"
 sudo cp "$BUILD_DIR/tiup-visualizer" "$DEPLOY_DIR/tiup-visualizer"

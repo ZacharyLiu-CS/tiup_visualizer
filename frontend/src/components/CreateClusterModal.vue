@@ -70,21 +70,41 @@
             <!-- Upload mode -->
             <div v-if="form.configSource === 'upload'" class="form-group">
               <label>上传 YAML 配置文件</label>
-              <div class="file-upload-area" :class="{ dragover: isDragOver }"
+              <div v-if="!uploadedFile"
+                class="file-drop-zone"
+                :class="{ dragover: isDragOver }"
                 @dragover.prevent="isDragOver = true"
                 @dragleave.prevent="isDragOver = false"
                 @drop.prevent="handleFileDrop"
                 @click="$refs.fileInput.click()">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="32" height="32">
-                  <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" />
-                </svg>
-                <p v-if="!uploadedFileName">点击或拖拽上传 .yaml 文件</p>
-                <p v-else class="uploaded-file-name">
-                  <span class="file-icon">&#128196;</span> {{ uploadedFileName }}
-                  <button class="clear-file-btn" @click.stop="clearUploadedFile" title="移除">&times;</button>
-                </p>
+                <div class="file-drop-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="40" height="40">
+                    <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                    <polyline points="17 8 12 3 7 8" />
+                    <line x1="12" y1="3" x2="12" y2="15" />
+                  </svg>
+                </div>
+                <p class="file-drop-primary">拖拽文件到此处，或点击选择</p>
+                <p class="file-drop-secondary">支持 .yaml / .yml 文件</p>
                 <input ref="fileInput" type="file" accept=".yaml,.yml,.toml" style="display:none"
                   @change="handleFileSelect" :disabled="deploying" />
+              </div>
+              <div v-else class="file-selected-card">
+                <div class="file-card-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                    <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                  </svg>
+                </div>
+                <div class="file-card-info">
+                  <span class="file-card-name">{{ uploadedFileName }}</span>
+                  <span class="file-card-size">{{ formatSize(uploadedFile.size) }}</span>
+                </div>
+                <button class="file-card-remove" @click.stop="clearUploadedFile" :disabled="deploying" title="移除文件">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                    <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
               </div>
             </div>
 
@@ -127,18 +147,23 @@
               <button v-if="deploying" class="cancel-btn" @click="cancelDeploy">取消</button>
             </div>
 
-            <!-- Deploy Output -->
-            <div v-if="deployOutput" class="result-box">
+            <!-- Deploy Output (streaming) -->
+            <div v-if="deployOutput || deploying" class="result-box">
               <div class="result-header">
-                <span class="result-count">部署结果</span>
-                <button class="copy-btn" @click="copyOutput" title="复制输出">
+                <span class="result-status">
+                  <span v-if="deploying" class="status-dot deploying"></span>
+                  <span v-else-if="deploySuccess" class="status-dot success"></span>
+                  <span v-else class="status-dot error"></span>
+                  {{ deploying ? '部署中...' : (deploySuccess ? '部署成功' : '部署失败') }}
+                </span>
+                <button class="copy-btn" @click="copyOutput" title="复制输出" :disabled="!deployOutput">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13">
                     <rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
                   </svg>
                   {{ outputCopied ? '已复制' : '复制' }}
                 </button>
               </div>
-              <pre class="result-output">{{ deployOutput }}</pre>
+              <pre ref="outputEl" class="result-output">{{ deployOutput }}<span v-if="deploying" class="cursor-blink">▋</span></pre>
             </div>
 
             <!-- Error -->
@@ -235,7 +260,8 @@ export default {
       deploying: false,
       deployOutput: '',
       deployError: '',
-      _abortController: null,
+      deploySuccess: false,
+      _eventSource: null,
       outputCopied: false,
     }
   },
@@ -271,6 +297,13 @@ export default {
       } else {
         this.historyConfigPreview = ''
       }
+    },
+    deployOutput() {
+      this.$nextTick(() => {
+        if (this.$refs.outputEl) {
+          this.$refs.outputEl.scrollTop = this.$refs.outputEl.scrollHeight
+        }
+      })
     },
   },
   methods: {
@@ -377,19 +410,18 @@ export default {
       if (this.$refs.fileInput) this.$refs.fileInput.value = ''
     },
 
-    // Deploy
+    // Deploy — post to start job, then open SSE stream
     async handleDeploy() {
       if (!this.canDeploy || this.deploying) return
 
       this.deploying = true
       this.deployOutput = ''
       this.deployError = ''
+      this.deploySuccess = false
 
-      // Use longer timeout for deploy (up to 30 min)
       try {
         let res
         if (this.form.configSource === 'upload' && this.uploadedFile) {
-          // File upload
           const formData = new FormData()
           formData.append('cluster_name', this.form.clusterName.trim())
           formData.append('version', this.form.version.trim())
@@ -397,13 +429,11 @@ export default {
           formData.append('config_file', this.uploadedFile)
           res = await clusterCreateAPI.deployUpload(formData)
         } else {
-          // JSON with pasted or history content
           let configContent = this.form.configContent
           if (this.form.configSource === 'history' && this.selectedHistoryName) {
             const cfgRes = await clusterCreateAPI.getConfig(this.selectedHistoryName)
             configContent = cfgRes.data || ''
           }
-
           res = await clusterCreateAPI.deploy({
             cluster_name: this.form.clusterName.trim(),
             version: this.form.version.trim(),
@@ -412,31 +442,82 @@ export default {
           })
         }
 
-        this.deployOutput = res.data?.output || JSON.stringify(res.data, null, 2)
-
-        // Refresh history after successful deployment
-        await this.loadHistory()
-
-        this.$emit('deployed', {
-          clusterName: this.form.clusterName.trim(),
-          output: this.deployOutput
-        })
-      } catch (e) {
-        const msg = e.response?.data?.detail || e.message || '部署失败'
-        // Extract meaningful message from response
-        this.deployError = msg
-        if (e.response?.data) {
-          this.deployOutput = typeof e.response.data === 'string'
-            ? e.response.data
-            : JSON.stringify(e.response.data, null, 2)
+        const jobId = res.data?.job_id
+        if (!jobId) {
+          throw new Error('server did not return a job_id')
         }
+
+        // Stream output via SSE
+        await this.streamJobOutput(jobId)
+      } catch (e) {
+        if (!this.deploying) return // cancelled
+        const msg = e.response?.data?.detail || e.message || '部署启动失败'
+        this.deployError = msg
       } finally {
         this.deploying = false
       }
     },
-    cancelDeploy() {
-      this.deploying = false
+
+    streamJobOutput(jobId) {
+      return new Promise((resolve, reject) => {
+        const url = clusterCreateAPI.deployStreamUrl(jobId)
+        const es = new EventSource(url)
+        this._eventSource = es
+        let receivedDone = false
+
+        es.onmessage = (e) => {
+          // plain line output
+          this.deployOutput += (this.deployOutput ? '\n' : '') + e.data
+        }
+
+        es.addEventListener('done', (e) => {
+          receivedDone = true
+          es.close()
+          this._eventSource = null
+          try {
+            const payload = JSON.parse(e.data)
+            if (payload.success) {
+              this.deploySuccess = true
+              this.loadHistory()
+              this.$emit('deployed', {
+                clusterName: this.form.clusterName.trim(),
+                output: this.deployOutput
+              })
+              resolve()
+            } else {
+              this.deployError = payload.error || '部署失败'
+              resolve() // still resolve — output was streamed
+            }
+          } catch {
+            this.deploySuccess = true
+            resolve()
+          }
+        })
+
+        es.onerror = () => {
+          if (receivedDone) return // already handled in 'done' event
+          es.close()
+          this._eventSource = null
+          // If we already have output, treat as a connection drop (not a fatal error)
+          if (this.deployOutput) {
+            this.deployError = '连接中断，部署可能仍在后台运行。请稍后检查集群状态。'
+            resolve()
+          } else {
+            reject(new Error('无法连接到部署输出流'))
+          }
+        }
+      })
     },
+
+    cancelDeploy() {
+      if (this._eventSource) {
+        this._eventSource.close()
+        this._eventSource = null
+      }
+      this.deploying = false
+      this.deployOutput += this.deployOutput ? '\n[已取消]' : '[已取消]'
+    },
+
     async copyOutput() {
       try {
         await navigator.clipboard.writeText(this.deployOutput)
@@ -622,32 +703,102 @@ label {
 .form-textarea:focus { border-color: #89b4fa; }
 .form-textarea:disabled { opacity: 0.55; cursor: not-allowed; }
 
-/* File upload area */
-.file-upload-area {
+/* File drop zone — cleaner look */
+.file-drop-zone {
   border: 2px dashed #45475a;
-  border-radius: 8px;
-  padding: 28px 20px;
-  text-align: center;
+  border-radius: 10px;
+  padding: 36px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
   cursor: pointer;
-  transition: all 0.2s;
-  background: rgba(49,50,68,0.3);
-  color: #6c7086;
+  transition: border-color 0.2s, background 0.2s;
+  background: #181825;
+  user-select: none;
 }
-.file-upload-area:hover, .file-upload-area.dragover {
+.file-drop-zone:hover,
+.file-drop-zone.dragover {
   border-color: #89b4fa;
-  background: rgba(137,180,250,0.06);
+  background: rgba(137,180,250,0.05);
+}
+.file-drop-zone.dragover {
+  border-style: solid;
+}
+.file-drop-icon {
+  color: #45475a;
+  transition: color 0.2s;
+  margin-bottom: 4px;
+}
+.file-drop-zone:hover .file-drop-icon,
+.file-drop-zone.dragover .file-drop-icon {
   color: #89b4fa;
 }
-.file-upload-area svg { margin-bottom: 8px; opacity: 0.6; }
-.uploaded-file-name {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 13px; color: #a6e3a1; font-weight: 500;
+.file-drop-primary {
+  font-size: 13px;
+  font-weight: 600;
+  color: #cdd6f4;
+  margin: 0;
 }
-.clear-file-btn {
-  background: none; border: none; color: #f38ba8; font-size: 16px;
-  cursor: pointer; padding: 0 4px; line-height: 1;
+.file-drop-secondary {
+  font-size: 12px;
+  color: #6c7086;
+  margin: 0;
 }
-.clear-file-btn:hover { color: #f38ba8; }
+
+/* Selected file card */
+.file-selected-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #181825;
+  border: 1px solid #313244;
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+.file-card-icon {
+  flex-shrink: 0;
+  color: #89b4fa;
+  display: flex;
+  align-items: center;
+}
+.file-card-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.file-card-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #cdd6f4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-card-size {
+  font-size: 11px;
+  color: #6c7086;
+}
+.file-card-remove {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: #6c7086;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+.file-card-remove:hover:not(:disabled) {
+  color: #f38ba8;
+  background: rgba(243,139,168,0.1);
+}
+.file-card-remove:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* Command preview */
 .cmd-preview {
@@ -712,14 +863,37 @@ label {
 
 /* Result box */
 .result-box { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
-.result-header { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
-.result-count { font-size: 12px; color: #a6e3a1; margin-right: auto; }
+.result-header {
+  display: flex; align-items: center; justify-content: flex-end; gap: 12px;
+}
+.result-status {
+  font-size: 12px; color: #a6adc8; margin-right: auto;
+  display: flex; align-items: center; gap: 6px;
+}
+.status-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.status-dot.deploying {
+  background: #f9e2af;
+  box-shadow: 0 0 0 0 rgba(249,226,175,0.6);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.status-dot.success { background: #a6e3a1; }
+.status-dot.error { background: #f38ba8; }
+
+@keyframes pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(249,226,175,0.6); }
+  70%  { box-shadow: 0 0 0 6px rgba(249,226,175,0); }
+  100% { box-shadow: 0 0 0 0 rgba(249,226,175,0); }
+}
+
 .copy-btn {
   display: inline-flex; align-items: center; gap: 4px;
   background: #313244; color: #a6adc8; border: 1px solid #45475a;
   border-radius: 5px; padding: 4px 10px; font-size: 12px; cursor: pointer; transition: background 0.15s;
 }
-.copy-btn:hover { background: #45475a; }
+.copy-btn:hover:not(:disabled) { background: #45475a; }
+.copy-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .result-error {
   background: rgba(243,139,168,0.1); border: 1px solid rgba(243,139,168,0.3);
@@ -728,8 +902,18 @@ label {
 .result-output {
   background: #11111b; border: 1px solid #313244; border-radius: 6px;
   padding: 12px; font-size: 12px; color: #cdd6f4; overflow: auto;
-  max-height: 400px; white-space: pre-wrap; margin: 0;
+  max-height: 380px; white-space: pre-wrap; margin: 0;
   font-family: 'JetBrains Mono', 'Consolas', monospace;
+  line-height: 1.55;
+}
+
+.cursor-blink {
+  animation: blink 1s step-end infinite;
+  color: #89b4fa;
+}
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
 }
 
 /* View toggle */

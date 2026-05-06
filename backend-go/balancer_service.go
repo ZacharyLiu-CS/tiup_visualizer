@@ -138,6 +138,7 @@ type BalancerService struct {
 	sseMu       sync.RWMutex
 	workerCtx   context.Context
 	stopWorkers context.CancelFunc
+	workersUp   bool // lazy init: workers only start on first task
 }
 
 func NewBalancerService() *BalancerService {
@@ -149,9 +150,20 @@ func NewBalancerService() *BalancerService {
 		sseClients:  make(map[chan SSEEvent]bool),
 		workerCtx:   ctx,
 		stopWorkers: cancel,
+		workersUp:   false,
 	}
-	s.startWorkers(ctx, s.concurrency)
+	// Workers are NOT started here — they start lazily on first task creation.
 	return s
+}
+
+// ensureWorkers starts the worker pool if not already running.
+func (s *BalancerService) ensureWorkers() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.workersUp {
+		s.startWorkers(s.workerCtx, s.concurrency)
+		s.workersUp = true
+	}
 }
 
 func (s *BalancerService) Stop() {
@@ -221,9 +233,15 @@ func (s *BalancerService) SetConcurrency(n int) {
 	s.mu.Lock()
 	oldConcurrency := s.concurrency
 	s.concurrency = n
+	wasUp := s.workersUp
 	s.mu.Unlock()
 
 	if n == oldConcurrency {
+		return
+	}
+
+	if !wasUp {
+		// Workers haven't started yet — just update concurrency, they'll start with new value
 		return
 	}
 
@@ -291,7 +309,8 @@ func (s *BalancerService) CreateTask(config TaskConfig) (string, error) {
 
 	s.broadcast(SSEEvent{Type: "task_created", Data: task})
 
-	// Enqueue for workers
+	// Enqueue for workers (lazy-start pool on first task)
+	s.ensureWorkers()
 	select {
 	case s.taskCh <- id:
 	default:

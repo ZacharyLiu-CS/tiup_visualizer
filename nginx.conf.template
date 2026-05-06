@@ -37,6 +37,39 @@ location __PATH_PREFIX__/api/ {
     proxy_buffering off;
 }
 
+# SSE/long-running API endpoints (deploy stream, balancer events)
+location __PATH_PREFIX__/api/v1/cluster-create/deploy/stream {
+    proxy_pass http://tiup_visualizer_backend/api/v1/cluster-create/deploy/stream;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Connection "";
+
+    proxy_connect_timeout 10s;
+    proxy_read_timeout 1800s;
+    proxy_send_timeout 30s;
+    proxy_buffering off;
+    chunked_transfer_encoding off;
+}
+
+location __PATH_PREFIX__/api/v1/balancer/events {
+    proxy_pass http://tiup_visualizer_backend/api/v1/balancer/events;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Connection "";
+
+    proxy_connect_timeout 10s;
+    proxy_read_timeout 1800s;
+    proxy_send_timeout 30s;
+    proxy_buffering off;
+    chunked_transfer_encoding off;
+}
+
 # Health check endpoint proxy
 location __PATH_PREFIX__/health {
     proxy_pass http://tiup_visualizer_backend/health;
