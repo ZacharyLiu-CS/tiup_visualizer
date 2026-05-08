@@ -199,6 +199,9 @@
               <div class="history-card-header" @click="toggleHistoryDetail(item.name)">
                 <span class="history-name">{{ item.name }}</span>
                 <span class="history-meta">{{ formatSize(item.size) }} · {{ item.createdAt }}</span>
+                <span v-if="item.md5" class="history-md5" title="点击复制完整 MD5" @click.stop="copyMd5(item.md5)">
+                  MD5: {{ item.md5 }}
+                </span>
                 <span class="history-expand">{{ expandedHistoryItem === item.name ? '▾' : '▸' }}</span>
               </div>
 
@@ -263,6 +266,8 @@ export default {
       deploySuccess: false,
       _eventSource: null,
       outputCopied: false,
+      _outputLines: [],       // internal line buffer
+      _outputFlushTimer: null, // batch flush timer
     }
   },
   computed: {
@@ -418,6 +423,11 @@ export default {
       this.deployOutput = ''
       this.deployError = ''
       this.deploySuccess = false
+      this._outputLines = []
+      if (this._outputFlushTimer) {
+        clearTimeout(this._outputFlushTimer)
+        this._outputFlushTimer = null
+      }
 
       try {
         let res
@@ -466,14 +476,34 @@ export default {
         let receivedDone = false
 
         es.onmessage = (e) => {
-          // plain line output
-          this.deployOutput += (this.deployOutput ? '\n' : '') + e.data
+          // Buffer lines and flush to DOM in batches to avoid per-line reactive updates
+          this._outputLines.push(e.data)
+          if (!this._outputFlushTimer) {
+            this._outputFlushTimer = setTimeout(() => {
+              this._outputFlushTimer = null
+              const MAX_LINES = 500
+              if (this._outputLines.length > MAX_LINES) {
+                this._outputLines = this._outputLines.slice(-MAX_LINES)
+              }
+              this.deployOutput = this._outputLines.join('\n')
+            }, 80)
+          }
         }
 
         es.addEventListener('done', (e) => {
           receivedDone = true
           es.close()
           this._eventSource = null
+          // Final flush: clear pending timer and render remaining buffered lines
+          if (this._outputFlushTimer) {
+            clearTimeout(this._outputFlushTimer)
+            this._outputFlushTimer = null
+          }
+          const MAX_LINES = 500
+          if (this._outputLines.length > MAX_LINES) {
+            this._outputLines = this._outputLines.slice(-MAX_LINES)
+          }
+          this.deployOutput = this._outputLines.join('\n')
           try {
             const payload = JSON.parse(e.data)
             if (payload.success) {
@@ -498,8 +528,14 @@ export default {
           if (receivedDone) return // already handled in 'done' event
           es.close()
           this._eventSource = null
+          // Final flush before error handling
+          if (this._outputFlushTimer) {
+            clearTimeout(this._outputFlushTimer)
+            this._outputFlushTimer = null
+            this.deployOutput = this._outputLines.join('\n')
+          }
           // If we already have output, treat as a connection drop (not a fatal error)
-          if (this.deployOutput) {
+          if (this.deployOutput || this._outputLines.length) {
             this.deployError = '连接中断，部署可能仍在后台运行。请稍后检查集群状态。'
             resolve()
           } else {
@@ -534,6 +570,19 @@ export default {
         i++
       }
       return bytes.toFixed(i > 0 ? 1 : 0) + ' ' + units[i]
+    },
+    async copyMd5(md5) {
+      try {
+        await navigator.clipboard.writeText(md5)
+      } catch {
+        // fallback for older browsers
+        const el = document.createElement('textarea')
+        el.value = md5
+        document.body.appendChild(el)
+        el.select()
+        document.execCommand('copy')
+        document.body.removeChild(el)
+      }
     },
   }
 }
@@ -933,6 +982,13 @@ label {
 .history-card-header:hover { background: #1e1e30; }
 .history-name { font-weight: 600; font-size: 14px; color: #cdd6f4; }
 .history-meta { font-size: 12px; color: #6c7086; flex: 1; }
+.history-md5 {
+  font-size: 11px; color: #585b70; font-family: monospace;
+  background: #1e1e2e; border: 1px solid #313244;
+  border-radius: 4px; padding: 1px 6px; cursor: pointer;
+  flex-shrink: 0; transition: all 0.15s; margin-left: auto;
+}
+.history-md5:hover { color: #cba6f7; border-color: #cba6f7; background: #1e1e30; }
 .history-expand { color: #6c7086; font-size: 12px; flex-shrink: 0; }
 
 .history-card-detail {

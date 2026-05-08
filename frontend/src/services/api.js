@@ -60,6 +60,11 @@ export const clusterAPI = {
   stopCluster: (clusterName) => api.post(`/clusters/${encodeURIComponent(clusterName)}/stop`, {}, { timeout: 5 * 60 * 1000 }),
   cleanCluster: (clusterName) => api.post(`/clusters/${encodeURIComponent(clusterName)}/clean`, {}, { timeout: 5 * 60 * 1000 }),
   destroyCluster: (clusterName) => api.post(`/clusters/${encodeURIComponent(clusterName)}/destroy`, {}, { timeout: 10 * 60 * 1000 }),
+  // Cluster config
+  getConfig: (clusterName) => api.get(`/clusters/${encodeURIComponent(clusterName)}/config`),
+  saveConfig: (clusterName, config) => api.post(`/clusters/${encodeURIComponent(clusterName)}/config`, { config }, { timeout: 60 * 1000 }),
+  reloadCluster: (clusterName) => api.post(`/clusters/${encodeURIComponent(clusterName)}/reload`, {}, { timeout: 5 * 60 * 1000 }),
+  exportTemplate: (clusterName) => api.post(`/clusters/${encodeURIComponent(clusterName)}/config/export-template`),
 }
 
 export const serverLogAPI = {

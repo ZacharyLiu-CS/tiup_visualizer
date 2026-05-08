@@ -16,17 +16,18 @@ import (
 
 // Server holds all dependencies for HTTP handlers.
 type Server struct {
-	cfg           *AppConfig
-	auth          *AuthService
-	tiup          *TiUPService
-	tikv          *TiKVService
-	update        *UpdateService
-	balancer      *BalancerService
-	pdctl         *PDCtlService
-	clusterCreate *ClusterCreateService
-	execDir       string
-	version       string
-	mux           *http.ServeMux
+	cfg            *AppConfig
+	auth           *AuthService
+	tiup           *TiUPService
+	tikv           *TiKVService
+	update         *UpdateService
+	balancer       *BalancerService
+	pdctl          *PDCtlService
+	clusterCreate  *ClusterCreateService
+	clusterConfig  *ClusterConfigService
+	execDir        string
+	version        string
+	mux            *http.ServeMux
 }
 
 func NewServer(cfg *AppConfig, execDir string) *Server {
@@ -39,6 +40,7 @@ func NewServer(cfg *AppConfig, execDir string) *Server {
 		balancer:      NewBalancerService(),
 		pdctl:         NewPDCtlService(),
 		clusterCreate: NewClusterCreateService(execDir),
+		clusterConfig: NewClusterConfigService(),
 		execDir:       execDir,
 		version:       loadVersion(execDir),
 		mux:           http.NewServeMux(),
@@ -112,6 +114,12 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET "+prefix+"/cluster-create/history", s.requireAuth(s.handleClusterCreateHistory))
 	s.mux.HandleFunc("GET "+prefix+"/cluster-create/config/{name}", s.requireAuth(s.handleClusterGetConfig))
 	s.mux.HandleFunc("DELETE "+prefix+"/cluster-create/config/{name}", s.requireAuth(s.handleClusterDeleteConfig))
+
+	// Cluster Config routes (auth required)
+	s.mux.HandleFunc("GET "+prefix+"/clusters/{clusterName}/config", s.requireAuth(s.handleClusterConfigGet))
+	s.mux.HandleFunc("POST "+prefix+"/clusters/{clusterName}/config", s.requireAuth(s.handleClusterConfigSave))
+	s.mux.HandleFunc("POST "+prefix+"/clusters/{clusterName}/reload", s.requireAuth(s.handleClusterReload))
+	s.mux.HandleFunc("POST "+prefix+"/clusters/{clusterName}/config/export-template", s.requireAuth(s.handleClusterConfigExportTemplate))
 
 	// WebSocket terminal (GET only, must be before catch-all)
 	s.mux.HandleFunc("GET /ws/terminal", s.handleTerminal)
@@ -1121,6 +1129,95 @@ func (s *Server) handleClusterDestroy(w http.ResponseWriter, r *http.Request) {
 		"message": "cluster destroyed successfully",
 		"cluster": clusterName,
 		"output":  output,
+	})
+}
+
+// --- Cluster Config ---
+
+func (s *Server) handleClusterConfigGet(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("clusterName")
+	slog.Info("ClusterConfig: get config request", "cluster", clusterName, "user", r.Header.Get("X-Username"))
+
+	config, err := s.clusterConfig.GetConfig(clusterName)
+	if err != nil {
+		slog.Error("ClusterConfig: get config failed", "cluster", clusterName, "error", err)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"cluster": clusterName,
+		"config":  config,
+	})
+}
+
+func (s *Server) handleClusterConfigSave(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("clusterName")
+	var req struct {
+		Config string `json:"config"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if strings.TrimSpace(req.Config) == "" {
+		writeError(w, http.StatusBadRequest, "config is required")
+		return
+	}
+
+	slog.Info("ClusterConfig: save config request", "cluster", clusterName, "user", r.Header.Get("X-Username"))
+
+	output, err := s.clusterConfig.SaveConfig(clusterName, req.Config)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("save config failed: %s\nOutput: %s", err.Error(), output))
+		return
+	}
+
+	slog.Info("ClusterConfig: save config success", "cluster", clusterName)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"message": "config saved successfully",
+		"cluster": clusterName,
+		"output":  output,
+	})
+}
+
+func (s *Server) handleClusterReload(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("clusterName")
+	slog.Info("ClusterConfig: reload request", "cluster", clusterName, "user", r.Header.Get("X-Username"))
+
+	output, err := s.clusterConfig.ReloadCluster(clusterName)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("reload failed: %s\nOutput: %s", err.Error(), output))
+		return
+	}
+
+	// Invalidate tiup cache after reload
+	s.tiup.cache = newTTLCache(cacheTTL)
+
+	slog.Info("ClusterConfig: reload success", "cluster", clusterName)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"message": "cluster reloaded successfully",
+		"cluster": clusterName,
+		"output":  output,
+	})
+}
+
+func (s *Server) handleClusterConfigExportTemplate(w http.ResponseWriter, r *http.Request) {
+	clusterName := r.PathValue("clusterName")
+	operator := r.Header.Get("X-Username")
+
+	slog.Info("ClusterConfig: export template request", "cluster", clusterName, "user", operator)
+
+	template, err := s.clusterConfig.ExportAsTemplate(clusterName, s.clusterCreate.historyDir, operator)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"message":  "template exported successfully",
+		"cluster":  clusterName,
+		"template": template,
 	})
 }
 

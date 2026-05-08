@@ -216,6 +216,7 @@
             :isHighlighted="highlightedClusters.includes(cluster.name)"
             @connect="handleClusterConnect"
             @detail="handleClusterDetail"
+            @config="handleClusterConfig"
             @refresh="handleClusterRefresh"
             :ref="el => { if (el) clusterRefs[cluster.name] = el }"
           />
@@ -226,10 +227,18 @@
       <ConnectionLines :lines="connectionLines" />
 
       <!-- Cluster Detail Modal -->
-      <ClusterDetailModal 
+      <ClusterDetailModal
         :clusterDetail="clusterDetail"
         @close="closeClusterDetail"
         @openAIAnalysis="openAIAnalysisPanel"
+      />
+
+      <!-- Cluster Config Modal -->
+      <ClusterConfigModal
+        :visible="showClusterConfig"
+        :clusterName="configClusterName"
+        @close="showClusterConfig = false"
+        @refresh="handleClusterRefresh"
       />
     </div>
 
@@ -243,6 +252,7 @@ import { useClusterStore } from '../stores/cluster'
 import HostCard from '../components/HostCard.vue'
 import ClusterCard from '../components/ClusterCard.vue'
 import ClusterDetailModal from '../components/ClusterDetailModal.vue'
+import ClusterConfigModal from '../components/ClusterConfigModal.vue'
 import ConnectionLines from '../components/ConnectionLines.vue'
 import WebTerminal from '../components/WebTerminal.vue'
 import ServerLogModal from '../components/ServerLogModal.vue'
@@ -257,6 +267,7 @@ export default {
     HostCard,
     ClusterCard,
     ClusterDetailModal,
+    ClusterConfigModal,
     ConnectionLines,
     WebTerminal,
     ServerLogModal,
@@ -289,6 +300,8 @@ export default {
       showServerLogs: false,
       showGraphTools: false,
       showCreateCluster: false,
+      showClusterConfig: false,
+      configClusterName: '',
       // update
       updateChecking: false,
       updateAvailable: false,
@@ -409,6 +422,10 @@ export default {
     },
     async handleClusterDetail(clusterName) {
       await this.selectClusterForDetail(clusterName)
+    },
+    handleClusterConfig(clusterName) {
+      this.configClusterName = clusterName
+      this.showClusterConfig = true
     },
     closeClusterDetail() {
       this.clearSelection()

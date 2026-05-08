@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -109,6 +110,7 @@ type HistoryEntry struct {
 	Size      int64  `json:"size"`
 	CreatedAt string `json:"created_at"`
 	Username  string `json:"username"`
+	MD5       string `json:"md5"`
 }
 
 // StartDeployJob validates params, saves config, and starts an async deploy job.
@@ -338,10 +340,18 @@ func (s *ClusterCreateService) ListHistory() ([]HistoryEntry, error) {
 			continue
 		}
 		name := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
+
+		// Compute MD5 of file content
+		fileMD5 := ""
+		if data, err := os.ReadFile(filepath.Join(s.historyDir, entry.Name())); err == nil {
+			fileMD5 = fmt.Sprintf("%x", md5.Sum(data))
+		}
+
 		result = append(result, HistoryEntry{
 			Name:      name,
 			Size:      info.Size(),
 			CreatedAt: info.ModTime().Format("2006-01-02 15:04:05"),
+			MD5:       fileMD5,
 		})
 	}
 

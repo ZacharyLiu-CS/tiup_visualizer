@@ -31,19 +31,28 @@
         </svg>
       </div>
     </div>
-    <div class="cluster-bottom" @click="handleDetail">
-      <div class="cluster-info">
+    <div class="cluster-bottom">
+      <div class="cluster-info" @click="handleDetail">
         <div class="cluster-name">{{ cluster.name }}</div>
         <div class="cluster-version">{{ cluster.version }}</div>
         <div class="cluster-user">User: {{ cluster.user }}</div>
       </div>
-      <div class="detail-link">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="10"/>
-          <line x1="12" y1="16" x2="12" y2="12"/>
-          <line x1="12" y1="8" x2="12.01" y2="8"/>
-        </svg>
-        <span>Details</span>
+      <div class="action-links">
+        <div class="detail-link" @click="handleDetail">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="16" x2="12" y2="12"/>
+            <line x1="12" y1="8" x2="12.01" y2="8"/>
+          </svg>
+          <span>Details</span>
+        </div>
+        <div class="config-link" @click="handleConfig">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+          <span>Config</span>
+        </div>
       </div>
     </div>
     <div class="cluster-actions">
@@ -132,7 +141,7 @@ export default {
       default: false
     }
   },
-  emits: ['connect', 'detail', 'refresh'],
+  emits: ['connect', 'detail', 'config', 'refresh'],
   data() {
     return {
       operating: '',  // 'start', 'stop', 'clean', 'destroy', or ''
@@ -176,6 +185,9 @@ export default {
     },
     handleDetail() {
       this.$emit('detail', this.cluster.name)
+    },
+    handleConfig() {
+      this.$emit('config', this.cluster.name)
     },
     toggleDDL() {
       this.showDDL = !this.showDDL
@@ -449,7 +461,6 @@ export default {
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-top: 6px;
   padding: 3px 10px;
   font-size: 11px;
   color: #3b82f6;
@@ -462,6 +473,31 @@ export default {
 .detail-link:hover {
   background: #dbeafe;
   color: #2563eb;
+}
+
+.config-link {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  font-size: 11px;
+  color: #8b5cf6;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.2s;
+  font-weight: 600;
+}
+
+.config-link:hover {
+  background: #ede9fe;
+  color: #7c3aed;
+}
+
+.action-links {
+  display: flex;
+  gap: 4px;
+  justify-content: center;
+  margin-top: 6px;
 }
 
 .status-bar {
